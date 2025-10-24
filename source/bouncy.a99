@@ -1,0 +1,3520 @@
+*********************************************************************
+*
+* Bouncy
+*
+* For the TI-99/4A home computer.
+*
+* To be assembled using xas99.
+*
+* (c) Rasmus Moustgaard 2015 <rasmus.moustgaard@gmail.com>
+*
+*********************************************************************
+
+	  DEF	START
+
+vdp_int_from_status:
+       equ  0
+
+**
+* Configuration
+NLIVES EQU  2                   * Number of lives
+SLEVEL EQU  1                   * Start level
+MAXFRM EQU  7000                * Max frames to complete level
+
+**
+* Conditional assembly config
+ANYMPW EQU  1                   * Is any map width allowed?
+HSCRL  EQU  0                   * Enable support for horizontal scrolling?
+BGTIME EQU  0                   * Use background color to visualize timing?
+
+**
+* Misc memory addresses
+VDPRD  EQU  >8800               * VDP read data
+VDPSTA EQU  >8802               * VDP status
+VDPWD  EQU  >8C00               * VDP write data
+VDPWA  EQU  >8C02               * VDP set read/write address
+RNDSD  EQU  >83C0               * Random number seed
+SOUND  EQU  >8400               * Sound
+SPCHRD EQU	>9000
+SPCHWT EQU	>9400
+
+
+**
+* VDP Memory Map
+PTRNTB EQU  >0000               * Pattern table base
+PTRNT1 EQU  >0800               * Pattern table part 2
+PTRNT2 EQU  >1000               * Pattern table part 3
+SPRPTB EQU  >1800               * Sprite pattern table
+SPRATB EQU  >1F80               * Sprite attribute table
+COLRTB EQU  >2000               * Color table base
+NAMET0 EQU  >2800               * Name table base 0
+FIXPAT EQU  >2B00               * Backup of fixed patterns 112-127
+FIXCOL EQU  >2B80               * Backup of fixed colors 112-127
+NAMET1 EQU  >2C00               * Name table base 1
+FIXMAP EQU  >2F00               * Map of right side panel
+NAMET2 EQU  >3000               * Name table base 2
+LGMAP  EQU  >3300               * Logo map
+NAMET3 EQU  >3400               * Name table base 3
+LGPAT  EQU  >3700               * Logo patterns
+LGCOL  EQU  >3B80               * Logo colors
+
+**
+* Scratch pad
+WRKSP  EQU  >8300               * Workspace
+STACK  EQU  >8320
+R0LB   EQU  WRKSP+1             * R0 low byte required for VDP routines
+R1LB   EQU  WRKSP+3
+R2LB   EQU  WRKSP+5
+R3LB   EQU  WRKSP+7
+R4LB   EQU  WRKSP+9
+R5LB   EQU  WRKSP+11
+R6LB   EQU  WRKSP+13
+R7LB   EQU  WRKSP+15
+*      Memory constants
+ONE    EQU  STACK+16            * Constant 1
+EIGHT  EQU  ONE+2               * Constant 8
+BYTEC0 EQU  EIGHT+2             * Constant >C0
+M_MAPW EQU  BYTEC0+2            * Map width
+*      Variables
+FRAME  EQU  M_MAPW+2            * Frame counter, reset when level begins
+SPR5TH EQU  FRAME+2             * Index of the 5th sprite on a line
+RANDNO EQU  SPR5TH+2            * Random number
+SCRLCT EQU  RANDNO+2            * Counter for when to scroll
+SCRLX  EQU  SCRLCT+2            * Horizontal scroll offset
+SCRLXV EQU  SCRLX+2             * As SCRLX but for the visible screen
+SCRLY  EQU  SCRLXV+2            * Vertical scroll offset
+SCRLYO EQU  SCRLY+2             * For saving old value of SCRLY
+JMPFRM EQU  SCRLYO+2            * Jump frame
+JMP1ST EQU  JMPFRM+2            * Zero if first jump frame, otherwise non-zero
+JMPDX  EQU  JMP1ST+2            * X jump direction
+JMPDY  EQU  JMPDX+2             * Y jump direction
+JMPZ   EQU  JMPDY+2             * Jump z position (height)
+JMPLEN EQU  JMPZ+2              * Jump length (0, 1, 2, 3)
+AUTJMP EQU  JMPLEN+2            * Flag to indicate beginning of automatic jump
+MOVDX  EQU  AUTJMP+2            * Adjustment to x position caused by scrolling
+MOVDXV EQU  MOVDX+2             * As MOVDX but for the visible screen
+MOVDYV EQU  MOVDXV+2            * Adjustment to y position caused by scrolling
+MTOFFS EQU  MOVDYV+2            * Last modified meta tile screen offset
+FSPRNO EQU  MTOFFS+2            * Flicker routine sprite number
+SCOREH EQU  FSPRNO+2            * Score high word
+SCOREL EQU  SCOREH+2            * Score low word
+ENERGY EQU  SCOREL+2            * Energy
+LIVES  EQU  ENERGY+2            * Lives
+LEVEL  EQU  LIVES+2             * Level number
+LVLPTR EQU  LEVEL+2             * Level pointer
+LVLCMP EQU  LVLPTR+2            * Level completed flag
+LVLLST EQU  LVLCMP+2            * Last played level number
+DIED   EQU  LVLLST+2            * Died flag
+STATUS EQU  DIED+2              * Special status
+MTSWPT EQU  STATUS+2            * Meta tile switch list pointer
+MTSWTL EQU  MTSWPT+2            * The number of the meta tile displayed by a switch
+COND   EQU  MTSWTL+2            * Condition (0=NORM, 1=DJMP, 2=IMMU, 2=CONF)
+CNDCNT EQU  COND+2              * Condition counter
+PGIFT  EQU  CNDCNT+2            * Sprite pattern shown after sparkles
+VCPY   EQU  PGIFT+2             * VDP copy loop (22 bytes)
+PLYRWS EQU  >83E0
+
+*      Assembler constants
+SCRINT EQU  6                   * Frames between the screen is scrolled
+       .IFNE  ANYMPW
+MAPW   EQU  24                  * Map width
+       .ELSE
+MAPW   EQU  32                  * Map width
+       .ENDIF
+MAPH   EQU  128                 * Map height
+VIEWW  EQU  24                  * Viewport width
+VIEWH  EQU  24                  * Viewport height
+SCRNW  EQU  32                  * Screen width
+SCRNH  EQU  24                  * Screen height
+PANELW EQU  8                   * Panel width
+PANELH EQU  24                  * Panel height
+Y_DIFF EQU  3                   * Adjustment in y needed when converting
+*                               * between sprite and map coordinates.
+*                               * 1 is because screen coordinates start at >FF.
+*                               * Not sure about the other 2.
+NLOGOP EQU  144
+
+       .IFNE HSCRL
+HSMARG EQU  24                  * Horizontal scroll margin
+       .IFNE ANYMPW
+HSXMIN EQU  0                   * Minimum SCRLX
+HSXMAX EQU  0                   * Maximum SCRLX
+       .ELSE
+HSXMIN EQU  0                   * Minimum SCRLX
+HSXMAX EQU  7                   * Maximum SCRLX
+       .ENDIF
+       .ENDIF
+
+* Sprites and patterns
+NSPR   EQU  14                  * Number of sprites
+NSPRPT EQU  56                  * Number of sprite patterns
+ABALL  EQU  0
+ASHADW EQU  52                  * Shadow attribute
+PBALL0 EQU  0
+PBALL1 EQU  8
+PBALL2 EQU  16
+PBALL3 EQU  24
+PBALL4 EQU  32
+PBALL5 EQU  40
+NENEMY EQU  4                   * Number of enemy sprites
+AENEMY EQU  8                   * First attribute for enemy sprites
+PENEMY EQU  64                  * First enemy patterns
+PDICE  EQU  64
+PSCISS EQU  96
+PTANK  EQU  128
+PKNIFE EQU  160
+NSPARK EQU  3                   * Number of sparkle sprites
+ASPARK EQU  40                  * First attribute for sparkle sprites
+PSPARK EQU  48                  * First sparkle pattern
+PXBALL EQU  192
+PBONUS EQU  196
+PNRG   EQU  200
+PPRF   EQU  204
+PGMO   EQU  216
+PEMPTY EQU  252
+
+* Meta tiles
+MTTILE EQU  0                   * Tile
+MTWATE EQU  1                   * Water
+MTQUES EQU  2                   * Question mark
+MTCOIN EQU  3                   * Coin
+MTARRO EQU  4                   * Arrow
+MTFINI EQU  5                   * Finish
+MTLAVA EQU  6                   * Lava
+MTSPAC EQU  7                   * Space
+
+CHZERO EQU  240                 * Zero character code
+CHNRG  EQU  250                 * First energy character code
+CHBALL EQU  126                 * Ball character code
+CHSPAC EQU  255                 * Space character code
+
+*      Level structure
+LVL_MP EQU  0                   * Pointer to map
+LVL_EN EQU  2                   * Poniter to enemy definition list
+LVL_SW EQU  4                   * Pointer to switch list
+LVL_CL EQU  6                   * Pointer to color change list
+LVL_SZ EQU  8                   * Structure size
+
+*      Enemy structure
+ENM_TP EQU  0                   * Enemy type (0: eol, 1: bounded, >1: not bounded)
+ENM_X  EQU  2                   * X position in map coordinates
+ENM_Y  EQU  4                   * Y position in map coordinates
+ENM_DX EQU  6                   * X velocity
+ENM_DY EQU  8                   * Y velocity
+ENM_PT EQU  10                  * Pattern number
+ENM_CL EQU  12                  * Colors 1st/2nd sprite
+ENM_AT EQU  14                  * Pointer to sprite attributes, 0 if not allocated
+ENM_CT EQU  16                  * Movement counter
+ENM_SZ EQU  18                  * Structure size
+
+*      Enemy definition structure
+END_TP EQU  0                   * Enemy type (0: eol, 1: bounded, >1: not bounded)
+END_X  EQU  1                   * X position in meta tiles
+END_Y  EQU  2                   * Y position in meta tiles
+END_DX EQU  3                   * X velocity
+END_DY EQU  4                   * Y velocity
+END_PT EQU  5                   * Pattern number
+END_C1 EQU  6                   * Color 1st sprite layer
+END_C2 EQU  7                   * Color 2nd sprite layer
+END_SZ EQU  8                   * Structure size
+
+*      Switch structure
+SW_X   EQU  0                   * x position of switch (meta tiles)
+SW_Y   EQU  1                   * y position of switch (meta tiles)
+SW_MTS EQU  2                   * Pointer to zero terminated list coordinates
+SW_SZ  EQU  4                   * of meta tile to trigger.
+
+*      Condition
+CN_NORM EQU 0                   * Normal
+CN_DJMP EQU 1                   * Double jump
+CN_IMMU EQU 2                   * Immunity
+CN_CONF EQU 3                   * Confusion
+CN_SPED EQU 4                   * Speed
+
+***************************************************************************
+*
+* Main program
+*
+       AORG	>A000
+       
+START  LIMI 0                   * Disable interrupts
+       LWPI WRKSP               * Set workspace
+       LI   R10,STACK           * Set up stack pointer
+*      Init
+       BL   @INIT
+*      Display logo
+NEWGME BL   @DSPLGO
+*      Init game
+       BL   @INIGME
+*      Init level
+NEWLVL BL   @INILVL
+*      Main loop
+LOOP   BL   @VSYNC
+*      Play music
+       BL   @PLAYMU
+*      Upload sprite attributes
+       BL   @FLICKR
+*      Scroll
+       BL   @SCROLL
+*      Update switched meta tiles
+       BL   @UPDSMT
+*      Check frame
+       BL   @CHKFRM
+*      Manage condition counter
+       BL   @MGCOND
+*      Map position
+       BL   @MAPPOS
+*      Enemy collisions
+       BL   @ENMCOL
+*      Read joystick
+       BL   @JOYST
+*      Move ball
+       BL   @MOVBAL
+*      Move enemies
+       BL   @MOVENM
+*      Display sparkle sprites
+       BL   @SPARKL
+*      Display time
+       BL   @DSPTME
+*      Check quit
+       BL   @CKQUIT
+*      Next frame
+NXTFRM MOV  @FRAME,R0
+       CI   R0,MAXFRM
+       JNE  NXTFR1
+       MOV  @ONE,@DIED
+NXTFR1 INC  R0
+       MOV  R0,@FRAME
+       .IFNE BGTIME
+       LI   R0,>070F
+       BL   @VWTR
+       .ENDIF
+*      Check for level done
+       MOV  @LVLCMP,R0
+       JNE  NEWLVL
+*      Check if died
+       MOV  @DIED,R0
+       JLT  DEAD
+*      Loop
+       JMP  LOOP
+*      Dead
+DEAD   BL   @MTESND
+       LI   R2,30
+       BL   @PAUSE
+       DEC  @LIVES
+       JGT  NEWLVL
+       JEQ  NEWLVL
+       BL   @GMEOVR
+       JMP  NEWGME
+
+***************************************************************************
+*
+* One time initializations
+INIT   MOV  R11,*R10+           * Push return address onto the stack
+*      Save random number seed
+       MOV    @RNDSD,@RANDNO
+*      Init constants
+       LI   R0,1
+       MOV  R0,@ONE
+       LI   R0,8
+       MOV  R0,@EIGHT
+       LI   R0,>C000
+       MOV  R0,@BYTEC0
+       LI   R0,MAPW
+       MOV  R0,@M_MAPW
+*      Copy VDP copy loop to scratch pad
+       LI   R0,VCPY
+       LI   R1,VCPY8
+       LI   R2,VCPY8E-VCPY8
+       BL   @COPY
+*      Init graphics mode
+       BL   @GMODE
+*      Upload static patterns to VDP
+       LI   R4,FPDATA
+       LI   R5,15               * Number of segments to upload
+INIT1  MOV  *R4+,R0
+       MOV  *R4+,R1
+       MOV  *R4+,R2
+       BL   @VDPCP
+       DEC  R5
+       JNE  INIT1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*      Destination, source, and length of uploaded data
+FPDATA
+*      Fixed chars 112-127
+       DATA 112*8+PTRNTB,FPT112,16*8
+       DATA 112*8+PTRNTB+>800,FPM112,16*8
+       DATA 112*8+PTRNTB+>1000,FPB112,16*8
+       DATA 112*8+COLRTB,FCL112,16*8
+       DATA FIXPAT,FPM112,16*8
+       DATA FIXCOL,FCL112,16*8
+*      Fixed char 240-255
+       DATA 240*8+PTRNTB,FPT240,16*8
+       DATA 240*8+PTRNTB+>800,FPM240,16*8
+       DATA 240*8+PTRNTB+>1000,FPB240,16*8
+       DATA 240*8+COLRTB,FCL240,16*8
+*      Panel map
+       DATA FIXMAP,PNLMAP,8*24
+*      Sprite patterns
+       DATA SPRPTB,SPR0,NSPRPT*32
+*      Logo map
+       DATA LGMAP,LMAP,256
+*      Logo patterns
+       DATA LGPAT,LPAT0,NLOGOP*8
+*      Upload logo colors
+       DATA LGCOL,LCOL0,NLOGOP*8
+*// INIT
+
+***************************************************************************
+*
+* New game initializations
+*
+INIGME MOV  R11,*R10+           * Push return address onto the stack
+       CLR  @SCOREH
+       CLR  @SCOREL
+       LI   R0,SLEVEL
+       MOV  R0,@LEVEL
+       DEC  R0
+       LI   R1,LVL_SZ
+       MPY  R1,R0
+       AI   R1,LEVELS
+       MOV  R1,@LVLPTR
+       CLR  @LVLLST
+       LI   R0,NLIVES
+       MOV  R0,@LIVES
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// INIGME
+
+***************************************************************************
+*
+* New level initializations
+*
+INILVL MOV  R11,*R10+           * Push return address onto the stack
+       BL   @MTESND
+*      Copy level info into place
+       MOV  @LVLPTR,R12
+*      Copy enemy list
+*      Note: Should really use structure EQUs
+       LI   R0,ENMLST           * Pointer to destination enemy list
+       MOV  @LVL_EN(R12),R1     * Pointer to source enemy definition list
+       MOV  *R1+,R2             * Number of entries
+       JEQ  INILV6
+INILV5 CLR  R3                  * Type
+       MOVB *R1+,@R3LB
+       MOV  R3,*R0+
+       CLR  R3                  * X position
+       MOVB *R1+,@R3LB
+       SLA  R3,4
+       MOV  R3,*R0+
+       CLR  R3                  * Y position
+       MOVB *R1+,@R3LB
+       SLA  R3,4
+       MOV  R3,*R0+
+       MOVB *R1+,R3             * X velocity
+       SRA  R3,8
+       MOV  R3,*R0+
+       MOVB *R1+,R3             * Y velocity
+       SRA  R3,8
+       MOV  R3,*R0+
+       CLR  R3                  * Pattern number
+       MOVB *R1+,@R3LB
+       MOV  R3,*R0+
+       MOV *R1+,*R0+             * Colors
+       CLR  *R0+                 * Pointer to sprite attributes
+       MOV  R2,R3
+       INC R3
+       MOV  R3,*R0+              * Counter
+       DEC  R2
+       JNE  INILV5
+INILV6 CLR  *R0+                 * End marker
+*      Copy switch list
+       LI   R0,SWLIST
+       MOV  @LVL_SW(R12),R1
+       MOV  *R1+,R2
+       BL   @COPY
+*      Unpack meta tile map
+       MOV  @LVL_MP(R12),R0
+       LI   R1,MTMAP
+       BL   @UNPACK
+*      Expand meta tile map to MAP
+       LI   R0,MTMAP
+       LI   R1,MTILES
+       BL   @EXPMAP
+*      Initialize the scroll tile map
+       BL   @INIST
+*      Only if level number changed
+       C    @LEVEL,@LVLLST
+       JEQ  INILV3
+*      Pre-scroll patterns
+       LI   R0,PATS             * Base pattern address
+       LI   R1,PTFRM0           * Destination address
+       BL   @PSCRL              * Pre-scroll patterns
+*      Pre-scroll colors
+       LI   R0,COLS             * Base color address
+       LI   R1,CLFRM0           * Destination address
+       BL   @PSCRL              * Pre-scroll colors
+*      Change colors
+       MOV  @LVL_CL(R12),R0
+       BL   @CHGCLR
+INILV3
+*      Init scrolling variables
+       .IFNE HSCRL
+       LI   R0,HSXMAX-HSXMIN+1/2+HSXMIN
+       MOV  R0,@SCRLX
+       MOV  R0,@SCRLXV
+       .ENDIF
+       LI   R0,MAPH             * Get map height in rows
+       AI   R0,-SCRNH           * Subtract one screen
+       SLA  R0,3                * Convert to pixels
+       DEC  R0                  * See INISCR
+       MOV  R0,@SCRLY           * Start at the bottom of the map
+       CLR  @SCRLCT             * Initialize scroll counter
+*      Init other variables
+       CLR  @FRAME
+       CLR  @JMPFRM
+       LI   R0,1
+       MOV  R0,@JMPLEN
+       CLR  @MOVDX
+       CLR  @MOVDXV
+       CLR  @MOVDYV
+       CLR  @JMPZ
+       LI   R0,2
+       MOV  R0,@FSPRNO          * Flicker routine sprite number
+       CLR  @LVLCMP
+       CLR  @DIED
+       CLR  @MTSWPT
+       CLR  @COND
+       CLR  @CNDCNT
+       CLR  @PGIFT
+*      Wait for fire
+       MOV  @LVLLST,R0
+       JNE  INILV4
+*      Display "Press Fire"
+       BL   @PRFIRE
+*      Screen off
+       LI   R0,>01A2
+       BL   @VWTR
+*      Display initial screen
+INILV4 BL   @INISCR
+*      Right panel
+       MOV  @LVLLST,R0
+       JNE  INILV2
+       BL   @DSPPNL
+*      Display lives
+INILV2 BL   @DSPLVS
+*      Display level
+       BL   @DSPLVL
+*      Restore energy
+       BL   @RSTNRG
+*      Restore time
+       BL   @RSTTME
+*      Restore ball color
+       CLR  R1
+       BL   @SETCLR
+*      Restore ball position
+       LI   R0,SPRATT+ABALL
+       LI   R1,>8060
+       MOV  R1,*R0+
+       INCT R0
+       MOV  R1,*R0
+       LI   R0,SPRATT+ASHADW
+       MOV  R1,*R0
+*      Place other sprites out of screen
+       LI   R0,SPRATT+AENEMY
+       LI   R1,>C000
+       LI   R2,NSPR-3
+INILV1 MOV  R1,*R0+
+       INCT R0
+       DEC  R2
+       JNE  INILV1
+*      Sprites attribute end marker
+       LI   R0,NSPR*4+SPRATB
+       LI   R1,>D000
+       BL   @VSBW
+*      Init music
+       BL   @INITMU
+*      Set name table
+       LI   R0,>020D
+       BL   @VWTR
+*      Screen on
+       LI   R0,>01E2
+       BL   @VWTR
+*      Wait a little
+       BL   @FLICKR
+       LI   R2,60
+       BL   @PAUSE
+*      Save last level
+       MOV  @LEVEL,@LVLLST
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// INILVL
+
+***************************************************************************
+*
+* Display "Press fire"
+*
+PRFIRE MOV  R11,*R10+           * Push return address onto the stack
+*      Upload attributes
+       LI   R0,SPRATB
+       LI   R1,PRFATT
+       LI   R2,13
+       BL   @VMBW
+*      Animate
+       MOVB @PRFATT,R3          * y position
+       LI   R4,PRFDAT           * Pointer to animation data
+PRFIR1 CLR  R2
+       MOVB *R4+,@R2LB          * Get repeat count
+       JEQ  PRFIR3
+       CLR  R5
+       MOVB *R4+,R5             * Get y increment
+PRFIR2 AB   R5,R3
+       MOV  R3,R1
+       LI   R0,SPRATB
+       BL   @VSBW
+       LI   R0,SPRATB+4
+       BL   @VSBW
+       LI   R0,SPRATB+8
+       BL   @VSBW
+       BL   @VSYNC
+       LI   R0,>0606            * Fire button
+       BL   @CHKKEY
+       JNE  PRFIR4
+       DEC  R2
+       JNE  PRFIR2
+       JMP  PRFIR1
+PRFIR3 CLR  R2
+       BL   @WTFIRE
+*      Return
+PRFIR4 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+PRFDAT BYTE 60,0,16,1,8,2,4,4
+       BYTE 2,-4,2,-2,2,-1,4,0
+       BYTE 2,1,2,2,2,4
+       BYTE 2,-2,2,-1,4,0,2,1,2,2
+       BYTE 0,0
+*// PRFIRE
+
+***************************************************************************
+*
+* Level complete
+*
+LVLOVR MOV  R11,*R10+           * Push return address onto the stack
+       SETO @LVLCMP
+       INC  @LEVEL
+       MOV  @LVLPTR,R0
+       AI   R0,LVL_SZ
+       MOV  *R0,R1
+       JNE  LVLOV1
+       LI   R0,LEVELS
+LVLOV1 MOV  R0,@LVLPTR
+       LI   R0,FINISH
+       BL   @SPEAK              * Say something
+LVLOV2 MOV  @FRAME,R0
+       CI   R0,MAXFRM
+       JHE  LVLOV3
+       BL   @VSYNC
+       BL   @DSPTME
+       LI   R0,11
+       BL   @ADDSCO
+       MOV  @FRAME,R0
+       AI   R0,16
+       MOV  R0,@FRAME
+       ANDI R0,32
+       JNE  LVLOV4
+       BL   @MTESND
+       JMP  LVLOV2
+LVLOV4 LI   R0,TCKSND
+       BL   @PLYSND
+       JMP  LVLOV2
+*      Return
+LVLOV3 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+TCKSND BYTE >03,>8F,>07,>90
+*// LVLOVR
+
+***************************************************************************
+*
+* Game over
+*
+GMEOVR MOV  R11,*R10+           * Push return address onto the stack
+       LI   R0,SPRATB
+       LI   R1,GMOATT
+       LI   R2,17
+       BL   @VMBW
+       LI   R2,18000            * Wait up to 5 minutes
+       BL   @WTFIRE
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// GMEOVR
+
+***************************************************************************
+*
+* Pause
+*
+* R2: Number of frames to wait
+*
+PAUSE  MOV  R11,*R10+           * Push return address onto the stack
+PAUSE1 BL   @VSYNC
+       DEC  R2
+       JNE  PAUSE1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// PAUSE
+
+***************************************************************************
+*
+* Wait for vertical retrace (CRU)
+*
+VSYNC  CLR  @SPR5TH
+       .ifeq vdp_int_from_status,0
+       CLR  R12
+VSYNC1 TB   2                   * Test CRU bit for VDP interrupt
+       JEQ  VSYNC1
+       MOVB @VDPSTA,R0
+       .else
+VSYNC2 MOVB @VDPSTA,R0
+       MOV	R0,R1
+       ANDI R1,>8000
+       JEQ  VSYNC2
+       .endif
+       ANDI	R0,>4000
+       JEQ	VSYNC3
+       ANDI	R1,>1F00
+       SWPB	R1
+       MOV	R1,@SPR5TH
+VSYNC3 B    *R11
+*// VSYNC       
+
+***************************************************************************
+*
+* Upload sprite attributes (flicker routine)
+*
+FLICKR MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0703
+       BL   @VWTR
+       .ENDIF
+*      Always copy ball sprites first (not including shadow)
+       LI   R0,SPRATB           * Destination
+       LI   R1,SPRATT
+       LI   R2,8
+       BL   @VDPCP
+*      Then copy remaining sprites starting from a changing position
+       MOV  @SPR5TH,R4          * Get number of 5th sprite on a line
+       JNE  FLICK1
+*      No 5th sprite - just start at the beginning
+FLICK0 LI   R4,2
+       JMP  FLICK2
+*      5th sprite
+FLICK1 CI   R4,NSPR-1           * Avoid bug in Classic99 where >1F is returned as 5th sprite
+       JGT  FLICK0
+       A    @FSPRNO,R4          * Add last start position
+       DECT R4                  * Because we start at 2
+       CI   R4,NSPR             * Check for overflow
+       JLT  FLICK2
+       AI   R4,-NSPR+2          * Wrap around
+FLICK2 MOV  R4,R1               * Place in source address
+       SLA  R1,2                * Multiply by four
+       AI   R1,SPRATT           * Add base address
+       LI   R2,NSPR             * Total number of sprites
+       S    R4,R2               * Subtract start sprite
+       SLA  R2,2                * Multiply by four
+       BL   @VDPCP0             * Copy
+       CI   R4,2                * Test if we started at beginning
+       JEQ  FLICK3              * No more to do
+       LI   R1,SPRATT+8         * Source address
+       MOV  R4,R2               * Start sprite
+       DECT R2                  * Minus 2 (because we start at 2)
+       SLA  R2,2                * Multiply by four
+       BL   @VDPCP0             * Copy
+FLICK3 MOV  R4,@FSPRNO          * Save start position
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// FLICKR
+
+***************************************************************************
+*
+* Scroll the screen
+*
+* Called every frame, but actually only scrolls every 6th frame.
+* In other frames it does part of the work to prepare the buffers.
+*
+* Frame 5: Set name table, change scroll offset, update patterns #5, updated name table #5
+* Frame 4: Update patterns #4, updated name table #4
+* Frame 3: Update patterns #3, updated name table #3
+* Frame 2: Update patterns #2, updated name table #2
+* Frame 1: Update patterns #1, updated name table #1
+* Frame 0: Update patterns #0, updated name table #0
+*
+SCROLL MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0704
+       BL   @VWTR
+       .ENDIF
+*      Check scroll counter
+       MOV  @SCRLCT,R0
+       JNE  SCROL2
+*      Every 6th frame {
+*      Reset scroll counter
+       LI   R0,SCRINT           * Set to 6
+       MOV  R0,@SCRLCT
+*      Set name table
+       BL   @SETNT              * This is what actually scrolls the screen
+*      Change scroll offset
+       MOV  @SCRLY,R0
+       JEQ  SCROL3              * Check for top of map
+       MOV  R0,@SCRLYO          * Save scroll offset, for use in UPDPT
+       DEC  R0
+       MOV  R0,@SCRLY
+*      Adjust ball position
+       MOV  @ONE,@MOVDYV
+*      Horizontal scrolling
+       .IFNE HSCRL
+       ANDI R0,>0007
+       CI   R0,>0007            * Only before we start updating a new set of buffers
+       JNE  SCROL2
+       BL   @HSCROL
+       .ENDIF
+*      }
+*      Every frame {
+*      Decrement counter (5 to 0)
+SCROL2 DEC  @SCRLCT
+*      Update patterns
+       BL   @UPDPT
+*      Update name table buffer
+       BL   @UPDNT
+*      }
+*      Return
+SCROL3 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// SCROLL
+
+***************************************************************************
+*
+* Horizontal scrolling
+*
+       .IFNE HSCRL
+HSCROL MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @MOVDX,R0
+       JEQ  HSCRO1
+       MOV  R0,@MOVDXV
+       CLR  @MOVDX
+       MOV  @SCRLX,@SCRLXV      * Update the visible scroll offset
+HSCRO1 CLR  R1
+       MOVB @SPRATT+1,@R1LB     * Get x position
+       A    @MOVDXV,R1
+       CI   R1,HSMARG-1
+       JGT  HSCRO2
+       MOV  @SCRLX,R1
+       CI   R1,HSXMIN
+       JEQ  HSCRO9
+       DEC  R1
+       MOV  R1,@SCRLX
+       LI   R1,8
+       MOV  R1,@MOVDX
+       JMP  HSCRO9
+HSCRO2 CI   R1,256-80-HSMARG-1
+       JLT  HSCRO9
+       MOV  @SCRLX,R1
+       CI   R1,HSXMAX
+       JEQ  HSCRO9
+       INC  R1
+       MOV  R1,@SCRLX
+       LI   R1,-8
+       MOV  R1,@MOVDX
+*      Return
+HSCRO9 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+       .ENDIF
+*// HSCROL
+
+***************************************************************************
+*
+* Check if we are in the frame just before a jump begins
+*
+CHKFRM MOV  @JMPFRM,R0
+       MOV  @COND,R1
+       CI   R1,CN_SPED          * Check for speed condition
+       JNE  CHKFR1
+       SLA  R0,1
+CHKFR1 MOV  @JMPLEN,R1
+       SLA  R1,1
+       SZC  @JMPMSK(R1),R0
+       MOV  R0,@JMP1ST          * Save as a flag
+       B    *R11
+JMPMSK DATA >0000,>FFE0,>FFC0,>FF80
+*// CHKFRM
+
+***************************************************************************
+*
+* Manage condition counter
+*
+MGCOND MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @CNDCNT,R0
+       JEQ  MGCON2
+       DEC  R0
+       JNE  MGCON1
+       MOV  @JMP1ST,R1          * Only end condition in first frame
+       JNE  MGCON3
+       CLR  @COND
+       CLR  R1                  * Normal color
+       BL   @SETCLR
+       JMP  MGCON1
+MGCON3 INC  R0                  * Set counter back to one
+MGCON1 MOV  R0,@CNDCNT
+*      Return
+MGCON2 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// MGCOND
+
+***************************************************************************
+*
+* Find position on map
+*
+MAPPOS MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0706
+       BL   @VWTR
+       .ENDIF
+*      Skip if dead
+       MOV  @DIED,R0            * Check died flag
+       JNE  MAPPO1
+*      Check if we are in the frame just before a jump begins
+       MOV  @JMP1ST,R0
+       JNE  MAPPO1
+*      Clear automatic jump flag
+       CLR  @AUTJMP
+*      Find position
+       CLR  R0
+       MOVB @SPRATT+1,@R0LB     * Get x position of ball
+       AI   R0,8
+       CLR  R1
+       MOVB @SPRATT,@R1LB       * Get y position of ball
+       AI   R1,8
+       BL   @GETMT              * Get meta tile at position
+*                               * Tile number in R0, map offset in R1
+       SLA  R0,1                * Convert meta tile number to word offset
+       AI   R0,MAPTBL           * Add jump table base
+       MOV  *R0,R0              * Get jump address
+       B    *R0
+*      Tile
+MPTILE JMP  MAPPO1
+*      Water
+MPWATE LI   R1,8
+       MOV  @COND,R0
+       CI   R0,CN_IMMU          * Check for immunity
+       JNE  MAPPO3
+       SRL  R1,1                * Half damage when immune
+MAPPO3 BL   @DECNRG
+       JMP  MAPPO1
+*      Question mark
+MPQUES BL   @QUESTM
+       JMP  MAPPO1
+*      Coin
+MPCOIN LI   R0,MTTILE           * Change to tile
+       BL   @SETMT
+       BL   @ISPARK             * Init sparkle
+       LI   R0,125
+       BL   @ADDSCO             * Add score
+*       LI   R1,FXCOIN
+*       CLR  R2
+*       BL   @playsfx
+       JMP  MAPPO1
+*      Long jump arrow
+MPARRO LI   R0,3
+       MOV  R0,@JMPLEN          * Jump length 3
+       CLR  @JMPFRM
+       CLR  @JMPDX              * Vertical
+       SETO @JMPDY
+       SETO @AUTJMP             * Set flag
+*       LI   R1,FXJUMP
+*       CLR  R2
+*       BL   @playsfx
+       JMP  MAPPO1
+*      Finish - next level
+MPFINI BL   @LVLOVR
+       JMP  MAPPO1
+*      Lava
+MPLAVA LI   R1,8
+       MOV  @COND,R0
+       CI   R0,CN_IMMU          * Check for immunity
+       JNE  MAPPO4
+       SRL  R1,1                * Half damage when immune
+MAPPO4 BL   @DECNRG
+       MOV  @JMPDX,R0
+       JNE  MAPPO5
+       MOV  @JMPDY,R0
+       JNE  MAPPO5
+       JMP  MAPPO6
+MAPPO5 NEG  @JMPDX
+       NEG  @JMPDY
+       MOV  @ONE,@AUTJMP
+       CLR  @JMPFRM
+MAPPO6
+       LI   R0,NO
+       BL   @SPEAK              * Say something
+       JMP  MAPPO1
+*      Space
+MPSPAC MOV  @DIED,R0
+       JNE  MAPPO1
+       MOV  @ONE,@DIED
+       CLR  @JMPFRM
+*      LI   R0,NO
+*      BL   @SPEAK              * Say something
+       JMP  MAPPO1
+*      Return
+MAPPO1 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+MAPTBL DATA MPTILE,MPWATE,MPQUES,MPCOIN,MPARRO,MPFINI,MPLAVA,MPSPAC
+*// MAPPOS
+
+***************************************************************************
+*
+* Enemy collisions
+*
+ENMCOL MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0707
+       BL   @VWTR
+       .ENDIF
+       MOV  @COND,R0            * Check for immunity condition
+       CI   R0,CN_IMMU
+       JEQ  ENMCO9
+       CLR  R4
+       MOVB @SPRATT+1,@R4LB     * Get ball x
+       CLR  R5
+       MOVB @SPRATT,@R5LB       * Get ball y
+       CLR  R6
+       CLR  R7
+       LI   R3,ENMLST           * Pointer to enemy list
+ENMCO1 MOV  *R3,R0              * Get first word of enemy structure
+       JEQ  ENMCO9              * Zero terminates list
+       MOV  @ENM_AT(R3),R0      * Get attributes address
+       JEQ  ENMCO8              * Skip if not allocated
+       MOVB *R0+,@R7LB          * Get enemy y
+       MOVB *R0,@R6LB           * Get enemy x
+       S    R4,R6               * Enemy x - ball x
+       ABS  R6
+       CI   R6,12               * Compare to sprite width
+       JGT  ENMCO8
+       S    R5,R7               * Enemy y - ball y
+       ABS  R7
+       CI   R7,12               * Compare to sprite width
+       JGT  ENMCO8
+*      Collision
+       MOV  @JMPZ,R0            * Check jump height
+       CI   R0,5
+       JGT  ENMCO8              * Skip collision if at top of jump
+       LI   R1,1
+       BL   @DECNRG             * Zap energy
+       JMP  ENMCO9              * No more enemies checked
+ENMCO8 AI   R3,ENM_SZ
+       JMP  ENMCO1
+*      Return
+ENMCO9 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// ENMCOL
+
+***************************************************************************
+*
+* Read joystick
+*
+JOYST  MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0709
+       BL   @VWTR
+       .ENDIF
+*      No control if dead
+       MOV  @DIED,R0            * Check died flag
+       JNE  JOYSTB
+*      Check if jump length/direction has already been set by landing in lava
+       MOV  @AUTJMP,R0
+       JGT  JOYSTB              * No control
+*      Read joystick using CRU
+       LI   R12,>0024           * CRU address of the column decoder
+       LI   R0,>0600            * Column 6, i.e joystick #1
+       LDCR R0,3                * Select it
+       LI   R12,>0006           * Base CRU address for joystick 1
+*      Get condition
+       MOV  @COND,R1
+*      Check if jump length/direction has already been set by landing on an arrow
+       MOV  @AUTJMP,R0
+       JNE  JOYST5              * Limited control
+*      Allow a change in jump length/direction in the frame just before a jump begins
+       MOV  @JMP1ST,R0
+       JEQ  JOYSTA              * Full control
+*      For jump length 1 we always allow a change in direction
+       C    @ONE,@JMPLEN
+       JEQ  JOYST0              * Direction control
+       JMP  JOYST5              * Limited control
+*      Init jump type variables
+JOYSTA MOV  @ONE,@JMPLEN
+       CI   R1,CN_DJMP          * Check condition
+       JNE  JOYSTC
+       INC  @JMPLEN             * Double jump condition
+JOYSTC CLR  @JMPFRM             * Clear the jump frame - important if we go from long to short jump
+*      Fire button
+       TB   0
+       JEQ  JOYST0
+       INC  @JMPLEN
+*      Init direction variables
+JOYST0 CLR  @JMPDY
+       CLR  @JMPDX
+*      Left
+       TB   1
+       JEQ  JOYST1
+       SETO @JMPDX              * DX=-1
+       JMP  JOYST2
+*      Right
+JOYST1 TB   2
+       JEQ  JOYST2
+       MOV  @ONE,@JMPDX         * DX=1
+*      Down
+JOYST2 TB   3
+       JEQ  JOYST3
+       MOV  @ONE,@JMPDY         * DY=1
+       JMP  JOYST9
+*      Up
+JOYST3 TB   4
+       JEQ  JOYST9
+       SETO @JMPDY              * DY=-1
+       JMP  JOYST9
+*      If a jump is already ongoing we allow stopping in mid air
+*      Left
+JOYST5 TB   1
+       JEQ  JOYST6
+       CI   R1,CN_CONF          * Check condition
+       JEQ  JOYSTE              * If confused do as if moving right
+JOYSTD MOV  @JMPDX,R0
+       JLT  JOYST7
+       CLR  @JMPDX              * DX=0
+       JMP  JOYST7
+*      Right
+JOYST6 TB   2
+       JEQ  JOYST7
+       CI   R1,CN_CONF          * Check condition
+       JEQ  JOYSTD              * If confused do as if moving left
+JOYSTE MOV  @JMPDX,R0
+       JGT  JOYST7
+       CLR  @JMPDX              * DX=0
+       JMP  JOYST7
+*      Down
+JOYST7 TB   3
+       JEQ  JOYST8
+       CI   R1,CN_CONF          * Check condition
+       JEQ  JOYSTG              * If confused do as if moving up
+JOYSTF MOV  @JMPDY,R0
+       JGT  JOYSTB
+       CLR  @JMPDY              * DY=0
+       JMP  JOYSTB
+*      Up
+JOYST8 TB   4
+       JEQ  JOYSTB
+       CI   R1,CN_CONF          * Check condition
+       JEQ  JOYSTF              * If confused do as if moving down
+JOYSTG MOV  @JMPDY,R0
+       JLT  JOYSTB
+       CLR  @JMPDY              * DY=0
+       JMP  JOYSTB
+*      Confused condition
+JOYST9 CI   R1,CN_CONF          * Check for confusion
+       JNE  JOYSTB
+       NEG  @JMPDX              * Invert x movement
+       NEG  @JMPDY              * Invert y movement
+*      Return
+JOYSTB DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// JOYST
+
+***************************************************************************
+*
+* Move ball
+*
+MOVBAL MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>070A
+       BL   @VWTR
+       .ENDIF
+*      Animate ball
+       MOV  @JMPFRM,R1          * Get animation frame
+       MOV  @COND,R0
+       CI   R0,CN_SPED          * Check for speed condition
+       JEQ  MOVBAG
+       LI   R0,1                * Check for odd frame
+       COC  R0,R1
+       JNE  MOVBA2              * Skip even frames
+       SRL  R1,1                * Shift out least significant bit
+MOVBAG MOV  @DIED,R0            * Check if died
+       JNE  MOVBAE
+*      If jump length now has the bits x5 x4 x3 x2 x1 x0
+*      For jump length 1 we want x3 x2 x1 x0: 0,1,2,3,...,15
+*      For jump length 2 we want x4 x3 x2 x0: 0,1,0,1,2,3,2,3,...,14,15,14,15
+*      For jump length 3 we want x5 x4 x3 x0: 0,1,0,1,0,1,0,1,2,3,2,3,2,3,2,3,...,14,15,14,15,14,15,14,15
+*      To use as index in the jump pattern and height tables
+       MOV  @JMPLEN,R0          * Get jump length
+       JEQ  MOVBA6              * Check for zero
+       MOV  R1,R2               * Copy frame to R2
+       DEC  R0                  * Prepare to shift jumpLength - 1
+       JEQ  MOVBA8              * No shift if zero
+       SRL  R2,0                * Shift
+MOVBA8 ANDI R2,>000E            * Only keep 3 bits
+       ANDI R1,>0001            * Plus the least significant bit
+       SOC  R2,R1               * OR them together to get 4 bits
+       JMP  MOVBA5
+*      Jump length 0 - no movement
+MOVBA6 CLR  R2
+       CLR  R5
+       JMP  MOVBA7
+MOVBA5 MOVB @JMPPAT(R1),R2      * Get sprite pattern to display
+       MOVB @JMPHGT(R1),R5      * Get height change
+*      Horizontal movement
+MOVBA7 CLR  R6
+       MOVB @SPRATT+1,@R6LB     * Get x position
+       MOV  @JMPDX,R3           * Check jump direction
+       A    @MOVDXV,R3          * Adjust for scrolling
+       JEQ  MOVBA3
+       JGT  MOVBA4
+       CI   R6,0                * Check left boundary
+       JGT  MOVBA3
+       JMP  MOVBA9
+MOVBA4 CI   R6,256-80           * Check right boundary
+       JLT  MOVBA3
+MOVBA9 CLR  R3                  * Stop movement
+MOVBA3 SWPB R3
+*      Vertical movement
+       CLR  R7
+       MOVB @SPRATT,@R7LB       * Get y position
+       MOV  @JMPDY,R4           * Get jump direction
+       A    @MOVDYV,R4          * Adjust for scrolling
+       JEQ  MOVBA1
+       JGT  MOVBAB
+       CI   R7,0                * Check top boundary
+       JGT  MOVBA1
+       JMP  MOVBAC
+MOVBAB CI   R7,192-17           * Check bottom boundary
+       JLT  MOVBA1
+MOVBAC CLR  R4                  * Stop movement
+MOVBA1 SWPB R4
+       LI   R0,ABALL+SPRATT     * Address of sprite attributes in CPU RAM
+*      Top layer
+       AB   R4,*R0+
+       AB   R3,*R0+
+       MOVB R2,*R0+             * Set pattern
+       INC  R0                  * Advance to y attribute of next sprite
+*      Bottom layer
+       AB   R4,*R0+
+       AB   R3,*R0+
+       AI   R2,>0400            * Next pattern
+       MOVB R2,*R0+             * Set pattern
+       INC  R0                  * Advance to y attribute of next sprite
+*      Shadow
+       LI   R0,ASHADW+SPRATT
+       AB   R4,*R0
+       AB   R5,*R0+             * Add to y
+       AB   R3,*R0
+       AB   R5,*R0+             * Add to x
+       MOVB R2,*R0              * Set pattern
+*      Record height
+       SRA  R5,8                * Height change
+       A    R5,@JMPZ            * Add to total height
+*      Clear scroll adjustment variables
+       CLR  @MOVDXV
+       CLR  @MOVDYV
+       JMP  MOVBA2
+*      Animate when died
+MOVBAE SRL  R1,2
+       CI   R1,11
+       JGT  MOVBAF
+       SLA  R1,1
+       AI   R1,DIEPAT
+       LI   R0,SPRATT+ABALL+2   * Address of pattern attribute in CPU RAM
+       MOVB *R1+,*R0
+       AI   R0,4
+       MOVB *R1,*R0
+       LI   R0,SPRATT+ASHADW
+       MOV  @SPRATT+ABALL,*R0+  * Place shadow directly under ball
+       MOVB *R1,*R0
+       LI   R1,1
+       BL   @DECNRG
+       JMP  MOVBA2
+MOVBAF SETO @DIED
+*      Next animation frame
+MOVBA2 INC  @JMPFRM
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// MOVBAL
+
+***************************************************************************
+*
+* Move enemies
+*
+MOVENM MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>070C
+       BL   @VWTR
+       .ENDIF
+       LI   R3,ENMLST           * Pointer to enemy list
+MOVEN1 MOV  *R3,R4              * Get first word of enemy structure
+       JNE  MOVENF
+       B    @MOVEN9             * Zero terminates list
+*      Check y position
+MOVENF MOV  @ENM_Y(R3),R4       * Get y position in map coordinates
+       S    @SCRLY,R4           * Subtract scroll position to get screen coordinate
+       AI   R4,-Y_DIFF          * Adjustment
+       CI   R4,-16              * Check if above screen
+       JLT  MOVENZ
+       CI   R4,191              * Check if below screen
+       JGT  MOVENZ
+       JMP  MOVENX
+MOVENZ B    @MOVEN4
+*      Check x position
+MOVENX MOV  @ENM_X(R3),R5       * Get x position
+       CI   R5,0                * Check if off left
+       JLT  MOVEN4
+       CI   R5,256-80           * Check if off right
+       JGT  MOVEN4
+*      Check if sprite allocated
+       MOV  @ENM_AT(R3),R0      * Get attributes address
+       JNE  MOVEN3              * Jump if already allocated
+*      Allocate sprite
+       LI   R0,SPRATT+AENEMY
+       LI   R2,NENEMY
+MOVEN2 CB   @BYTEC0,*R0
+       JNE  MOVEN6
+*      Found one
+       MOV  R0,@ENM_AT(R3)      * Save attribute address
+       JMP  MOVEN3
+MOVEN6 AI   R0,8
+       DEC  R2
+       JNE  MOVEN2
+*      Cannot allocate sprite
+       JMP  MOVEN7              * Next enemy
+*      Pattern
+MOVEN3 MOV  @FRAME,R6
+       ANDI R6,>0018
+       A    @ENM_PT(R3),R6
+*      Color
+       MOV  @ENM_CL(R3),R7      * Color
+*      Write attributes
+       SWPB R4
+       SWPB R5
+       SWPB R6
+       MOVB R4,*R0+             * Write y attribute
+       MOVB R5,*R0+             * Write x attribute
+       MOVB R6,*R0+             * Write pattern attribute
+       MOVB R7,*R0+             * Color
+       AI   R6,>0400
+       MOVB R4,*R0+             * Write y attribute
+       MOVB R5,*R0+             * Write x attribute
+       MOVB R6,*R0+             * Write pattern attribute
+       MOVB @R7LB,*R0+          * Color
+*      Movement
+       DEC  @ENM_CT(R3)         * Count down to movement
+       JNE  MOVEN7
+       LI   R0,4
+       MOV  R0,@ENM_CT(R3)      * Reset counter
+       MOV  @ENM_DX(R3),R7      * dx
+       MOV  @ENM_DY(R3),R8      * dy
+*      Check type
+       C    @ONE,@ENM_TP(R3)    * Check if type if bounded
+       JNE  MOVEN5
+*      Bounded - check bounds
+       SWPB R5                  * Move x to LSB
+       MOV  R5,R0               * x
+       SWPB R4                  * Move y to LSB
+       MOV  R4,R1               * y
+       MOV  R7,R7               * Test dx
+       JEQ  MOVENB
+       JLT  MOVENA
+       AI   R0,16               * dx>0: one metatile offset if moving right
+MOVENA A    R7,R0               * dx<>0. x + dx
+       JMP  MOVENG
+MOVENB AI   R0,8                * dx=0: x+=8 (center x)
+MOVENG MOV  R8,R8               * Test dy
+       JEQ  MOVEND
+       JLT  MOVENC
+       AI   R1,16               * dy>0: one metatile offset if moving down
+MOVENC A    R8,R1               * dy<>0: y + dy
+       JMP  MOVENH
+MOVEND AI   R1,8                * dy=0: y+=8 (center y)
+MOVENH BL   @GETMT              * Get metatile at R0,R1
+*                               * On return R0=meta tile, R1=map address
+       CI   R0,MTTILE           * Check if moving on tile
+       JEQ  MOVEN5
+*      Change velocity 90 degress
+       BL   @RAND               * Let chance decide which way to turn
+       JLT  MOVEN8
+       NEG  R7                  * -dx (turn left)
+*      Check new position
+MOVEN8 MOV  R5,R0               * x
+       MOV  R4,R1               * y
+       MOV  R8,R8               * Test dy
+       JEQ  MOVENI
+       A    R8,R0               * x + dy
+       JMP  MOVENJ
+MOVENI AI   R0,8                * Center x
+MOVENJ MOV  R7,R7               * Text dx
+       JEQ  MOVENK
+       A    R7,R1               * y +/- dx
+       JMP  MOVENL
+MOVENK AI   R1,8                * Center y
+MOVENL BL   @GETMT
+       CI   R0,MTTILE           * Check if moving on tile
+       JEQ  MOVENE
+*      Go with other direction
+       NEG  R7
+*      Swap dx and dy
+MOVENE MOV  R7,R9               * tmp=dx
+       MOV  R8,R7               * dx=dy
+       MOV  R9,R8               * dy=tmp
+       MOV  R7,@ENM_DX(R3)      * Write dx (= dy)
+       MOV  R8,@ENM_DY(R3)      * Write dy  (= +/-dx)
+*      Move
+MOVEN5 A    R7,@ENM_X(R3)       * x += dx
+       A    R8,@ENM_Y(R3)       * y += dy
+       JMP  MOVEN7
+*      Disable
+MOVEN4 MOV  @ENM_AT(R3),R0      * Get attributes address
+       JEQ  MOVEN7              * Jump if not allocated
+       MOV  @BYTEC0,*R0+        * Move out of screen
+       INCT R0
+       MOV  @BYTEC0,*R0+        * Move out of screen
+       CLR  @ENM_AT(R3)         * Deallocate sprite
+*      Next enemy
+MOVEN7 AI   R3,ENM_SZ
+       B    @MOVEN1
+*      Return
+MOVEN9 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// MOVENM
+
+***************************************************************************
+*
+* Display sparkle sprites
+*
+SPARKL MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>070D
+       BL   @VWTR
+       .ENDIF
+       MOV  @FRAME,R0           * Only run very 4th frame
+       ANDI R0,3
+       JNE  SPARK4
+       CLR  R0
+       LI   R1,SPRATT+ASPARK    * Attribute pointer
+       LI   R2,NSPARK           * Counter
+SPARK1 CB   @BYTEC0,*R1         * Check for out of screen
+       JEQ  SPARK2              * Skip if so
+       MOVB @2(R1),R0           * Read the current pattern
+       CI   R0,PXBALL*256       * Check if it's a gift
+       JHE  SPARK6
+       AI   R0,>0100            * Add one to the pattern
+       CI   R0,PSPARK+16*256    * Check if it's the last one
+       JEQ  SPARK3
+       MOVB R0,@2(R1)           * Set pattern
+       LI   R0,>0100            * y offset
+       AB   R0,*R1              * Move y
+       JMP  SPARK2              * Next
+*      Done with sparkles
+SPARK3 MOV  @PGIFT,R3           * Get gift pattern and color
+       CI   R3,16               * If no gift or another gift visible
+       JLE  SPARK5              * then remove the sprite
+       MOV  R3,@2(R1)           * Set gift pattern and color
+       LI   R3,16               * Number of frame where gift will be visible
+       MOV  R3,@PGIFT           * Set counter
+       JMP  SPARK2
+*      Count down while displaying gift pattern
+SPARK6 LI   R0,>0100            * y offset
+       AB   R0,*R1              * Move y
+;       MOV  @PGIFT,R0
+;       ANDI R0,>000F
+;       SWPB R0
+;       MOVB R0,@3(R1)
+       DEC  @PGIFT              * Decrement counter
+       JNE  SPARK2
+*      Remove sprite
+SPARK5 MOVB @BYTEC0,*R1
+*      Next sprite
+SPARK2 AI   R1,4
+       DEC  R2
+       JNE  SPARK1
+*      Return
+SPARK4 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// SPARKL
+
+***************************************************************************
+*
+* Check for quit
+*
+CKQUIT MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>07E
+       BL   @VWTR
+       .ENDIF
+       CLR  R1                  * Test column 0
+       LI   R12,>0024           * Address for column selection
+       LDCR R1,3                * Select column
+       LI   R12,>0006           * Address to read rows
+       STCR R1,8
+       ANDI R1,>1100
+       JEQ  QUIT
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*      Quit
+QUIT   BLWP @>0000
+
+***************************************************************************
+*
+* Set name table
+*
+* Altenate between tables 0 and 1 in frames 0-7
+* Alternate between tables 2 and 3 in frames 8-15
+*
+* Tables 0 and 2 contain 'names' from the low character set (0-127)
+* Tables 1 and 3 contain 'names' from the high character set (128-255)
+*
+* Modifies R0
+*
+SETNT  MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @SCRLY,R0           * Get scroll offset
+       COC  @EIGHT,R0           * Check which table set to use
+       JEQ  SETNT2
+       COC  @ONE,R0             * Check which table to use
+       JEQ  SETNT1
+       LI   R0,>020A            * NAMET0
+       JMP  SETNT4
+SETNT1 LI   R0,>020B            * NAMET1
+       JMP  SETNT4
+SETNT2 COC  @ONE,R0             * Check which table to use
+       JEQ  SETNT3
+       LI   R0,>020C            * NAMET2
+       JMP  SETNT4
+SETNT3 LI   R0,>020D            * NAMET3
+*      Update register 2
+SETNT4 BL   @VWTR
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// SETNT
+
+***************************************************************************
+*
+* Update pattern and color tables
+*
+* Alternate between updating low (0-127) or high (128-255) half of
+* the character set. The set that is updated is not used (and therefore
+* not visible) in the currently displayed name table. This provides the
+* desired double buffering effect.
+*
+* Modifies R0-R3
+*
+UPDPT  MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @SCRLYO,R3          * Get old scroll offset
+*      Calculate VDP RAM destination address
+       COC  @ONE,R3             * Check which character set to update
+       JEQ  UPDPT1
+       LI   R0,PTRNTB+>400      * Update high character set (128-255)
+       JMP  UPDPT2
+UPDPT1 LI   R0,PTRNTB           * Update low character set (128-255)
+*      Calculate CPU RAM source address
+UPDPT2 LI   R1,7                * Start with last frame
+       S    R3,R1               * Subtract scroll frame
+       INC  R1                  * Adjust for direction
+       ANDI R1,>0007            * Mod 8
+       MPY  @STLNUM,R1          * Multiply by number of patterns
+       MOV  R2,R1               * Get result back
+       SLA  R1,3                * 8 bytes per pattern
+       AI   R1,PTFRM0
+*      Use the value of the scroll counter SCRLCT
+*      to determine which tables to update this frame
+       MOV  @SCRLCT,R2          * Get scroll counter
+       SLA  R2,1                * Convert to word offset
+       MOV  @JMPTBL(R2),R2      * Get address from jump table
+       B    *R2                 * Branch
+*      Scroll counter 0         * 1st pattern table
+UPDPT3 MOV  @STLNU2,R2          * First 2/3 of patterns
+       BL   @VM8BW
+       JMP  UPDPT9
+*      Scroll counter 1
+UPDPT4 AI   R0,>800             * 2nd pattern table
+       MOV  @STLNU2,R2          * First 2/3 of patterns
+       BL   @VM8BW
+       JMP  UPDPT9
+*      Scroll counter 2
+UPDPT5 AI   R0,>1000            * 3rd pattern table
+       MOV  @STLNU2,R2          * First 2/3 of patterns
+       BL   @VM8BW
+       JMP  UPDPT9
+*      Scroll counter 3
+UPDPT6 AI   R0,COLRTB           * Color table
+       AI   R1,CLFRM0-PTFRM0    * Add offset between patterns and colors
+       MOV  @STLNU2,R2          * First 2/3 of patterns
+       BL   @VM8BW
+       JMP  UPDPT9
+*      Scroll counter 4
+UPDPT7 MOV  @STLNU3,R2          * Last 1/3 of pattern 1,2
+       JEQ  UPDPT9              * No more
+       MOV  @STLNU2,R3
+       SLA  R3,3                * Offset to last 1/3
+       A    R3,R0               * Add to destination
+       A    R3,R1               * Add to source
+       MOV  R0,R4
+       MOV  R1,R5
+       BL   @VM8BW              * 1st pattern table
+       MOV  R4,R0
+       AI   R0,>800             * 2nd pattern table
+       MOV  R5,R1
+       MOV  @STLNU3,R2          * Last 1/3
+       BL   @VM8BW
+       JMP  UPDPT9
+*      Scroll counter 5
+UPDPT8 MOV  @STLNU3,R2          * Last 1/3
+       JEQ  UPDPT9              * No more
+       MOV  @STLNU2,R3
+       SLA  R3,3                * Offset to last 1/3
+       A    R3,R0               * Add to destination
+       A    R3,R1               * Add to source
+       MOV  R0,R4
+       MOV  R1,R5
+       AI   R0,>1000            * 3nd pattern table
+       BL   @VM8BW
+       MOV  R4,R0
+       AI   R0,COLRTB           * Color table
+       MOV  R5,R1
+       AI   R1,CLFRM0-PTFRM0    * Add offset between patterns and colors
+       MOV  @STLNU3,R2          * Last 1/3
+       BL   @VM8BW
+*      Return
+UPDPT9 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*      Jump table
+JMPTBL DATA UPDPT3,UPDPT4,UPDPT5,UPDPT6,UPDPT7,UPDPT8
+*// UPDPT
+
+***************************************************************************
+*
+* Update name table off-screen buffer
+*
+* The prepared buffers have a one row (8 pixels) offset from
+* from the currently visible buffers.
+*
+* Altenate between updating table buffers 2 and 3 in frames 0-7
+* Alternate between updating table buffers 0 and 1 in frames 8-15
+*
+* Since we have 8 frames to update two buffers we need to update
+* 1/4 buffer each frame, i.e. 6 screen rows. First frame we update 
+* rows 0-5 of the first buffer. Second frame we update the same 6 
+* rows of the second buffer, but this time we set the most significant
+* bit to use the high character set. Third frame we update rows 6-11 
+* of the first buffer, and so on.
+*
+* Because is this case we only scroll every 6th frame (according to 
+* when @SCRLCT is zero) we only have to update 1/6 of the usual, i.e.
+* one row each time the routine is called. The scroll counter offset
+* is used to determine which row to update.
+*
+* Modifies R0-R4
+*
+UPDNT  MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @SCRLCT,R4          * Get scroll counter 5,4,3,2,1,0
+       .IFNE  ANYMPW
+       MOV  R4,R5
+       MPY  @M_MAPW,R5          * Map scroll counter offset = scroll counter * MAPW
+       MOV  R6,R5
+       SLA  R4,5                * Screen scroll counter offset = scroll counter * 32
+       .ELSE
+       SLA  R4,5                * Screen scroll counter offset = scroll counter * 32
+       MOV  R4,R5               * Map scroll counter offset = Screen scroll counter offset
+       .ENDIF
+       MOV  @SCRLY,R3           * Get scroll position
+       ANDI R3,>000F            * Frame = position mod 16
+*      Calculate row offset to the 1/4 of the buffer to update
+       MOV  R3,R0               * Start with frame number
+       ANDI R0,>0006            * Transform to sequence: 0,0,2,2,4,4,6,6...
+       MOV  R0,R2               * Copy to R2
+       SLA  R0,1                * Multiply by 2
+       A    R0,R2               * Add to R2 to multiply by 3 and get row offset: 0,0,6,6,12,12,18,18...
+       MOV  R2,R0               * Copy back into R0 for later
+*      Calculate map source address in R1
+       MOV  @SCRLY,R1           * Get scroll offset in pixels
+       SRL  R1,3                * Divide by 8 to get row offset
+       DEC  R1                  * Prepared buffer has a 1 row offset
+       A    R2,R1               * Add the row offset we calculated before
+       .IFNE  ANYMPW
+       MPY  @M_MAPW,R1          * Multiply by MAPW to get character offset
+       .ELSE
+       SLA  R1,5                * Multiply by 32 to get character offset
+       MOV  R1,R2               * Copy to R2
+       .ENDIF
+       LI   R1,MAP              * Get the map base address
+       A    R2,R1               * Add the character offset
+       A    R5,R1               * Add map scroll counter offset
+      .IFNE HSCRL
+       A    @SCRLX,R1           * Add x scroll offset
+       .ENDIF
+*      Calculate buffer destination address in R0
+       SLA  R0,5                * Convert row offset to screen character offset
+       A    R4,R0               * Add screen scroll counter offset
+*      Decide which buffer to update
+       COC  @EIGHT,R3           * Bit weight >08 determines the group
+       JNE  UPDNT2              * If not set we update buffer 2 or 3
+       COC  @ONE,R3             * Bit weight >01 determines the buffer
+       JEQ  UPDNT1
+       AI   R0,NAMET0           * Add base address to character offset
+       JMP  UPDNT4
+UPDNT1 AI   R0,NAMET1           * Add base address to character offset
+       JMP  UPDNT4
+UPDNT2 COC  @ONE,R3             * Bit weight >01 determines the buffer
+       JEQ  UPDNT3
+       AI   R0,NAMET2           * Add base address to character offset
+       JMP  UPDNT4
+UPDNT3 AI   R0,NAMET3           * Add base address to character offset
+*      Copy to VDP RAM buffer
+UPDNT4 LI   R2,VIEWW/8          * Number of 8 character groups to copy
+       COC  @ONE,R3             * High or low character set copy?
+       JEQ  UPDNT5
+       BL   @VM8BW              * Low character set
+       JMP  UPDNT6
+UPDNT5 BL   @VM8BHW             * High character set
+*      Return
+UPDNT6 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// UPDNT
+
+***************************************************************************
+*
+* Set graphics mode
+*
+GMODE  MOV  R11,*R10+           * Push return address onto the stack
+       CLR  R0
+       LI   R1,VREGS
+       LI   R2,8
+GMODE1 MOVB *R1+,@R0LB
+       BL   @VWTR               * Set register
+       AI   R0,>0100
+       DEC  R2
+       JNE  GMODE1
+*      Clear VDP RAM
+       CLR  R0
+       CLR  R1
+       LI   R2,>4000
+       BL   @VSMW
+*      Initialize the Color Table
+       LI   R0,COLRTB
+       LI   R1,>F000            * White pixels on transparent background
+       LI   R2,>800
+       BL   @VSMW
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+VREGS  BYTE >02                 * Graphics II mode
+       BYTE >E2                 * 16K, display on, interrupt enabled
+       BYTE >0D                 * NAMETB = >3400
+       BYTE >9F                 * COLRTB = >2000, >800 bytes
+       BYTE >03                 * PTRNTB = >0000, >1800 bytes
+       BYTE >3F                 * SPRATB = >1F80
+       BYTE >03                 * SPRPTB = >1800
+       BYTE >00                 * Backdrop color
+*// GMODE
+
+***************************************************************************
+*
+* Unpack meta tile map from nybbles to bytes
+*
+* R0: Source address of compressed meta tile map
+* R1: Destination address of unpacked map
+*
+UNPACK LI   R2,MAPW*MAPH/16
+UNPAC1 MOV  *R0+,R4
+       LI   R3,4
+UNPAC2 MOV  R4,R5
+       ANDI R5,>F000
+       SRL  R5,4
+       MOVB R5,*R1+
+       SLA  R4,4
+       DEC  R3
+       JNE  UNPAC2
+       DEC  R2
+       JNE  UNPAC1
+*      Return
+       B    *R11
+*// EXPMAP
+
+***************************************************************************
+*
+* Expand meta tile map
+*
+* R0: Address of meta tile map
+* R1: Address of meta tile list (each entry 4 bytes)
+*
+* On return the map is expanded to address MAP.
+*
+EXPMAP MOV  R11,*R10+           * Push return address onto the stack
+       LI   R4,MAP              * Destination address
+       LI   R3,MAPH/2           * Meta row counter
+EXPMA1 LI   R2,MAPW/2           * Meta column counter
+EXPMA2 CLR  R5
+       MOVB *R0+,R5             * Get meta tile number
+       SRL  R5,6                * Convert to offset in list
+       A    R1,R5               * Add list base address
+       MOV  *R5+,*R4+           * Write 2 even row bytes
+       MOV  *R5,@MAPW-2(R4)     * Write 2 odd row bytes
+       DEC  R2                  * Meta column counter
+       JNE  EXPMA2
+       AI   R4,MAPW             * Advance destination one row
+       DEC  R3                  * Meta row counter
+       JNE  EXPMA1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// EXPMAP
+
+***************************************************************************
+*
+* Initialize the scroll tile map
+* and update the tile maps to contain scroll tile entries 
+*
+* On return MAP has been updated
+* and @STLNUM contains the number of scroll tiles
+*
+INIST  MOV  R11,*R10+           * Push return address onto the stack
+*      Save next MAPW bytes after map
+*      LI   R0,ROWBUF
+*      LI   R1,MAPE
+*      LI   R2,MAPW
+*      BL   @COPY
+*      Repeat first row after last row
+       LI   R0,MAPE             * Repeat first row after last row
+       LI   R1,MAP              * to allow correctly wrapping scroll
+       LI   R2,MAPW             * tiles to be calculated for last row
+       BL   @COPY
+*      Main routine
+       CLR  R0                  * R0 is the index of the highest scroll tile
+       LI   R1,MAP              * R1 is the address in the tile map
+       LI   R2,MAPE-MAP         * R2 is number of tiles to update
+INIST1 MOVB *R1,R3              * Get 'scroll to' tile
+       SWPB R3                  * R3 LSB is index of 'scroll to' tile
+       MOVB @MAPW(R1),R3        * R3 MSB is index of 'scroll from' tile
+       LI   R4,STILES           * R4 is the address in the scroll tile map
+       CLR  R5                  * R5 is index of currently checked scroll tile
+INIST2 C    R5,R0               * Check if last existing scroll tile is reached
+       JEQ  NEWST
+       C    *R4,R3              * Check if scroll tile exists
+       JEQ  OLDST
+       INCT R4                  * Next word
+       INC  R5                  * Next index
+       JMP  INIST2
+OLDST  SWPB R5
+       MOVB R5,*R1              * Update tile map
+       SWPB R5
+       JMP  INIST3
+NEWST  SWPB R0
+       MOVB R0,*R1              * Update tile map
+       MOV  R3,*R4              * Create new scroll tile entry
+       SWPB R0       
+       INC  R0                  * Next scroll tile
+       INCT R4
+INIST3 INC  R1                  * Next tile in map
+       DEC  R2                  * Decrement counter
+       JNE  INIST1
+*      Save number of tiles
+       MOV  R0,@STLNUM          * Save number of tiles
+       MOV  R0,R1               * Dividend
+       CLR  R0                  * Prepare for division
+       LI   R2,3                * Divisor
+       DIV  R2,R0               * Divide by 3
+       MOV  R0,R2               * Copy quotient
+       SLA  R2,1                * 2/3 of tiles
+       MOV  R2,@STLNU2          * Save it
+       A    R1,R0               * Add remainder to last 1/3
+       MOV  R0,@STLNU3          * Save it
+*      Restore next MAPW bytes after map
+*      LI   R0,MAPE
+*      LI   R1,ROWBUF
+*      LI   R2,MAPW
+*      BL   @COPY
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// INIST
+
+***************************************************************************
+*
+* Pre-scroll scroll tiles into 8 frames of increasing scroll offset
+*
+* R1: Destination address
+* R0: Base tile pattern/color address
+*
+PSCRL  MOV  R11,*R10+           * Push return address onto the stack
+       CLR  R7                  * R7 is the scroll offset/frame (0-7)
+PSCRL0 LI   R2,STILES           * R2 is the address in the scroll tile map
+       CLR  R6                  * R6 is index of current scroll tile
+PSCRL1 MOV  *R2,R3              * R3 contains indices of from/to tiles
+       MOV  R7,R7               * Check for 0 offset
+       JEQ  PSCRL3              * Skip 'scroll to' tile if offset is 0
+       MOV  R3,R4               * R4 LSB is index of 'scroll to' tile
+       ANDI R4,>00FF            * Clear MSB
+       SLA  R4,3                * Multiply by 8
+       AI   R4,8                * Add 8
+       S    R7,R4               * Minus offset
+       A    R0,R4               * Add base address of CPU RAM patterns
+       MOV  R7,R5               * Copy 'offset' bytes
+PSCRL2 MOVB *R4+,*R1+           * Copy byte
+       DEC  R5                  * Decrement counter
+       JNE  PSCRL2
+PSCRL3 SWPB R3
+       MOV  R3,R4               * R4 LSB is index of 'scroll from' tile
+       ANDI R4,>00FF            * Clear MSB
+       SLA  R4,3                * Multiply by 8
+       A    R0,R4               * Add base address of CPU RAM patterns
+       LI   R5,8                * Copy 8 bytes
+       S    R7,R5               * Minus scroll offset
+PSCRL4 MOVB *R4+,*R1+           * Copy byte
+       DEC  R5                  * Decrement counter
+       JNE  PSCRL4              * Loop
+       INCT R2                  * Next word in scroll tile map
+       INC  R6                  * Next scroll tile
+       C    R6,@STLNUM          * Check if all tiles done
+       JNE  PSCRL1
+       AI   R0,8*32
+       INC  R7                  * Next offset/frame
+       CI   R7,8                * Check if last frame
+       JNE  PSCRL0
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// PSCRL  
+
+***************************************************************************
+*
+* Display initial screen
+*
+* Note that the pattern frame that should be uploaded here depends on the
+* initial direction of the scrolling. If we want ot start at the bottom and
+* scroll up, VPFRM0 should be loaded instead, and @SCRLY should be initilized
+* so that the four least significant bits are all ones, e.g. 511.
+*
+INISCR MOV  R11,*R10+           * Push return address onto the stack
+*      Upload patterns part 1
+       LI   R0,PTRNTB           * Destination address in VDP RAM
+       LI   R1,PTFRM0           * Address of last scrolled pattern frame
+       MOV  @STLNUM,R2          * Number of patterns of 8 bytes
+       BL   @VM8BW              * Call copying routine
+       LI   R0,PTRNTB+>400      * Destination address in VDP RAM
+       LI   R1,PTFRM0           * Address of last scrolled pattern frame
+       MOV  @STLNUM,R2          * Number of patterns of 8 bytes
+       BL   @VM8BW              * Call copying routine
+*      Upload patterns part 2
+       LI   R0,PTRNT1           * Destination address in VDP RAM
+       LI   R1,PTFRM0           * Address of last scrolled pattern frame
+       MOV  @STLNUM,R2          * Number of patterns of 8 bytes
+       BL   @VM8BW              * Call copying routine
+       LI   R0,PTRNT1+>400      * Destination address in VDP RAM
+       LI   R1,PTFRM0           * Address of last scrolled pattern frame
+       MOV  @STLNUM,R2          * Number of patterns of 8 bytes
+       BL   @VM8BW              * Call copying routine
+*      Upload patterns part 3
+       LI   R0,PTRNT2           * Destination address in VDP RAM
+       LI   R1,PTFRM0           * Address of last scrolled pattern frame
+       MOV  @STLNUM,R2          * Number of patterns of 8 bytes
+       BL   @VM8BW              * Call copying routine
+       LI   R0,PTRNT2+>400      * Destination address in VDP RAM
+       LI   R1,PTFRM0           * Address of last scrolled pattern frame
+       MOV  @STLNUM,R2          * Number of patterns of 8 bytes
+       BL   @VM8BW              * Call copying routine
+*      Upload colors
+       LI   R0,COLRTB           * Destination address in VDP RAM
+       LI   R1,CLFRM0           * Address of last scrolled color frame
+       MOV  @STLNUM,R2          * Number of pattern colors of 8 bytes
+       BL   @VM8BW              * Call copying routine
+       LI   R0,COLRTB+>400      * Destination address in VDP RAM
+       LI   R1,CLFRM0           * Address of last scrolled color frame
+       MOV  @STLNUM,R2          * Number of pattern colors of 8 bytes
+       BL   @VM8BW              * Call copying routine
+*      Init name tables
+       MOV  @SCRLY,R4           * Get initial scroll offset in pixels
+       SRL  R4,3                * Convert to row offset
+       .IFNE  ANYMPW
+       LI   R3,MAPW
+       MPY  R4,R3
+       .ELSE
+       SLA  R4,5                * Convert to character offset
+       .ENDIF
+       .IFNE HSCRL
+       A    @SCRLX,R4           * Add x scroll offset
+       .ENDIF
+*      Table 0
+       LI   R0,NAMET0           * Destination address in VDP RAM
+       LI   R1,MAP-MAPW         * Base address of map data
+       A    R4,R1               * Add character offset
+       CLR  R5
+       BL   @DSPSCR             * Display screen
+*      Table 1
+       LI   R0,NAMET1           * Destination address in VDP RAM
+       LI   R1,MAP-MAPW         * Base address of map data
+       A    R4,R1               * Add character offset
+       SETO  R5
+       BL   @DSPSCR             * Display screen
+*      Table 2
+       LI   R0,NAMET2           * Destination address in VDP RAM
+       LI   R1,MAP              * Base address of map data
+       A    R4,R1               * Add character offset
+       CLR  R5
+       BL   @DSPSCR             * Display screen
+*      Table 3
+       LI   R0,NAMET3           * Destination address in VDP RAM
+       LI   R1,MAP              * Base address of map data
+       A    R4,R1               * Add character offset
+       SETO  R5
+       BL   @DSPSCR             * Display screen
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// INISCR
+
+***************************************************************************
+*
+* Look for switch and initialize update of meta tiles
+*
+* R1: Meta tile map offset of potential trigger
+*
+SWITCH MOV  R11,*R10+           * Push return address onto the stack
+*      Calculate coordinates of offset
+       AI   R1,-MTMAP           * Subtract base address
+       CLR  R0
+       LI   R3,MAPW/2
+       DIV  R3,R0               * R0 is Meta tile row number (y), R1 is column number (x)
+       SWPB R1                  * Move column to MSB
+       SOC  R0,R1               * Combine with LSB in R1
+*      Look for coordinates in list
+       LI   R0,SWLIST           * List of switches
+SWITC1 MOV  *R0+,R2             * Get switch coordinates
+       JEQ  SWITC3              * Zero terminates list
+       C    R1,R2               * Check if coordinates match position
+       JNE  SWITC2
+*      Found switch, record the address of tile list
+       MOV  *R0+,@MTSWTL        * Record which tile number to use
+       MOV  *R0,@MTSWPT         * Record address of tiles
+       SETO R0
+       LI   R0,CONNEC
+       BL   @SPEAK              * Say something
+       JMP  SWITC4
+SWITC2 AI   R0,4
+       JMP  SWITC1
+SWITC3 CLR  R0
+*      Return
+SWITC4 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// SWITCH
+
+***************************************************************************
+*
+* Update switched meta tiles
+*
+UPDSMT MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0705
+       BL   @VWTR
+       .ENDIF
+       MOV  @MTSWPT,R0          * Get pointer to meta tile list
+       JEQ  UPDSM2              * Return if not set
+       MOV  *R0,R1              * Get meta tile coordinates
+       JEQ  UPDSM1              * Zero terminates list
+       MOV  @MTSWTL,R0          * Get tile to use
+       BL   @SETMTP
+       INCT @MTSWPT
+       JMP  UPDSM2
+UPDSM1 CLR  @MTSWPT
+*      Return
+UPDSM2 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// SWITCH
+
+***************************************************************************
+*
+* Display screen
+*
+* R0: Destination
+* R1: Source
+* R5: High character flag
+*
+DSPSCR MOV  R11,*R10+           * Push return address onto the stack
+       LI   R6,VIEWH            * Rows
+DSPSC1 MOV  R0,R7
+       LI   R2,VIEWW/8          * Columns / 8
+       ABS  R5
+       JNE  DSPSC2
+       BL   @VM8BW
+       JMP  DSPSC3
+DSPSC2 BL   @VM8BHW
+DSPSC3 MOV  R7,R0
+       AI   R0,SCRNW            * Next screen row
+       AI   R1,MAPW-VIEWW
+       DEC  R6
+       JNE  DSPSC1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// DSPSCR
+
+***************************************************************************
+*
+* Get the meta tile at the specified screen position
+*
+* R0: x position (pixels)
+* R1: y position (pixels)
+*
+* On return R0 contains the meta tile number and R1 the map address.
+*
+GETMT  MOV  R11,*R10+           * Push return address onto the stack
+       A    @SCRLY,R1           * Add scroll offset to y
+       AI   R1,Y_DIFF           * Adjustment
+       .IFNE  ANYMPW
+       SRL  R1,4                * Divide by 16 to find row number
+       LI   R2,MAPW/2
+       MPY  R2,R1               * Multiply to MAPW to find row offset
+       MOV  R2,R1
+       .ELSE
+       ANDI R1,>FFF0            * Row offset
+       .ENDIF
+       SRL  R0,3                * Offset into row (characters)
+       .IFNE HSCRL
+       A    @SCRLX,R0           * Add x scroll offset
+       .ENDIF
+       SRL  R0,1                * Offset in meta tiles
+       A    R0,R1               * Map offset
+       AI   R1,MTMAP            * Add base address
+       CLR  R0
+       MOVB *R1,@R0LB           * Get meta tile
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// GETMT
+
+***************************************************************************
+*
+* Set meta tile at specified map coordinates
+*
+* R0: Meta tile number to set
+* R1: Map coordinates x,y in MSB,LSB
+*
+SETMTP MOV  R11,*R10+           * Push return address onto the stack
+       MOV  R1,R3               * Save x
+       ANDI R1,>00FF            * y
+       LI   R2,MAPW/2           * Map width in meta tiles
+       MPY  R2,R1               * y * w in R2
+       SRL  R3,8                * x
+       A    R3,R2               * x + y * w
+       MOV  R2,R1               * Map offset
+       AI   R1,MTMAP            * Add base address
+       BL   @SETMT
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// SETMTP
+
+***************************************************************************
+*
+* Set the meta tile at the specified address
+*
+* R0: Meta tile number to set
+* R1: Meta tile map address
+*
+* On return MTMAP and MAP has been updated
+*
+NW     EQU  0
+NE     EQU  1
+SW     EQU  2
+SE     EQU  3
+
+SETMT  MOV  R11,*R10+           * Push return address onto the stack
+*      Update meta tile map
+       MOVB @R0LB,*R1
+*      Get meta tile numbers from map
+       CLR  R3
+       MOVB @-MAPW/2(R1),R3     * Meta tile number above
+       SWPB R3
+       MOV  R0,R4               * Meta tile number middle
+       CLR  R5
+       MOVB @MAPW/2(R1),R5      * Meta tile number below
+       SWPB R5
+*      Get pointers to tile numbers
+       SLA  R3,2                * Multiply by 4 (4 tiles per meta tile)
+       AI   R3,MTILES           * Add base of meta tile definitions list
+       SLA  R4,2                * Multiply by 4
+       AI   R4,MTILES           * Add base of meta tile definitions list
+       SLA  R5,2                * Multiply by 4
+       AI   R5,MTILES           * Add base of meta tile definitions list
+*      Destination address in MAP
+       AI   R1,-MTMAP           * Offset into meta tile map
+       .IFNE  ANYMPW
+       CLR  R6
+       MOV  R1,R7               * Offset into meta tile map
+       LI   R8,MAPW/2
+       DIV  R8,R6               * R6 is Meta tile row number, R7 is column number
+       MOV  R7,R9               * Save the column
+       MPY  R8,R6               * Meta tile offset at start of row in R7
+       SLA  R7,2                * Character offset at start of row
+       MOV  R7,R6
+       SLA  R9,1                * Multiply column by 2 to get character offset
+       A    R9,R6               * Add to row offset to get offset into MAP
+       .ELSE
+       MOV  R1,R6               * Offset into meta tile map
+       ANDI R6,>FFF0            * Meta tile offset at start of row
+       SLA  R6,2                * Multiply by 4 to get character offset
+       ANDI R1,>000F            * Meta tile offset into row
+       SLA  R1,1                * Multiply by 2 to get character offset
+       A    R1,R6               * Add to get offset into MAP
+       .ENDIF
+       AI   R6,MAP-MAPW         * Add base address, one row up
+*      Destination address/offset in VDP RAM
+       MOV  R6,R7
+       AI   R7,-MAP             * Back to offset
+       MOV  @SCRLY,R0           * Scroll offset
+       SRL  R0,3                * Scroll offset in rows
+       .IFNE  ANYMPW
+       MPY  @M_MAPW,R0          * Scroll offset in map characters in R1
+       MOV  R7,R8
+       S    R1,R8               * Offset from top of screen *in map characters*
+       JLT  SETMT6
+       CLR  R7
+       DIV  @M_MAPW,R7          * R7 has row, R8 has column *** NOTE: doesn't work if R8 was negative
+       SLA  R7,5                * Multiply by screen width
+       A    R8,R7               * Add column
+       .ELSE
+       SLA  R0,5                * Scroll offset in characters
+       S    R0,R7               * Offset from top of screen
+       JLT  SETMT6
+       .ENDIF
+       MOV  R7,R8               * Make a copy for visible buffer
+       AI   R7,SCRNW            * Off-screen buffer is scrolled one row
+       .IFNE HSCRL
+       S    @SCRLX,R7           * Subtract x scroll offset
+       .ENDIF
+       AI   R7,NAMET0           * Add offset to name table buffer
+       .IFNE HSCRL
+       S    @SCRLXV,R8          * Subtract visible x scroll offset
+       .ENDIF
+       MOV  R8,@MTOFFS          * Save for later
+       AI   R8,NAMET2           * Visible buffers
+       MOV  @SCRLY,R0
+       COC  @EIGHT,R0           * Check which buffers to use
+       JEQ  SETMT1
+       AI   R7,NAMET2-NAMET0    * Use second set of buffers in frames 0-7
+       AI   R8,NAMET0-NAMET2
+       JMP  SETMT1
+*      Negative offset from top
+SETMT6 SETO @MTOFFS
+       LI   R7,>8000
+       LI   R8,>8000
+**
+*      Lookup scroll tile and write to MAP (top-left)
+SETMT1 MOVB @SW(R3),@R0LB
+       MOVB @NW(R4),R0
+       BL   @FINDST
+       MOVB R1,*R6+
+*      Write to VDP off-screen buffer
+       BL   @SETMT2
+*      Write to VDP visible buffer
+       BL   @SETMT3
+*      Lookup scroll tile and write to MAP (top-right)
+       MOVB @SE(R3),@R0LB
+       MOVB @NE(R4),R0
+       BL   @FINDST
+       MOVB R1,*R6+
+*      Write to VDP off-screen buffer
+       BL   @SETMT2
+*      Write to VDP visible buffer
+       BL   @SETMT3
+*      Next row
+       AI   R6,MAPW-2           * Next row
+       AI   R7,30
+       AI   R8,30
+*      Lookup scroll tile and write to MAP (middle-left)
+       MOVB @NW(R4),@R0LB
+       MOVB @SW(R4),R0
+       BL   @FINDST
+       MOVB R1,*R6+
+*      Write to VDP off-screen buffer
+       BL   @SETMT2
+*      Write to VDP visible buffer
+       BL   @SETMT3
+*      Lookup scroll tile and write to MAP (middle-right)
+       MOVB @NE(R4),@R0LB
+       MOVB @SE(R4),R0
+       BL   @FINDST
+       MOVB R1,*R6+
+*      Write to VDP off-screen buffer
+       BL   @SETMT2
+*      Write to VDP visible buffer
+       BL   @SETMT3
+*      Next row
+       AI   R6,MAPW-2           * Next row
+       AI   R7,30
+       AI   R8,30
+*      Lookup scroll tile and write to MAP (bottom-left)
+       MOVB @SW(R4),@R0LB
+       MOVB @NW(R5),R0
+       BL   @FINDST
+       MOVB R1,*R6+
+*      Write to VDP off-screen buffer
+       BL   @SETMT2
+*      Write to VDP visible buffer
+       BL   @SETMT3
+*      Lookup scroll tile and write to MAP (bottom-right)
+       MOVB @SE(R4),@R0LB
+       MOVB @NE(R5),R0
+       BL   @FINDST
+       MOVB R1,*R6+
+*      Write to VDP off-screen buffer
+       BL   @SETMT2
+*      Write to VDP visible buffer
+       BL   @SETMT3
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*      Write to VDP off-screen buffer (address in R7, byte in R1)
+SETMT2 MOV  R11,*R10+           * Push return address onto the stack
+       COC  @W300H,R7           * Check of out of screen
+       JEQ  SETMT4
+       MOV  R7,R0
+       JLT  SETMT4
+       ANDI R1,>7FFF            * Clear msb
+       BL   @VSBW
+       AI   R0,NAMET1-NAMET0    * Next table buffer
+       ORI  R1,>8000            * Set msb
+       BL   @VSBW
+SETMT4 INC  R7
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*      Write to VDP visible buffer (address in R8, byte in R1)
+SETMT3 MOV  R11,*R10+           * Push return address onto the stack
+       COC  @W300H,R8           * Check of out of screen
+       JEQ  SETMT5
+       MOV  R8,R0
+       JLT  SETMT5
+       ANDI R1,>7FFF            * Clear msb
+       BL   @VSBW
+       AI   R0,NAMET1-NAMET0    * Next table buffer
+       ORI  R1,>8000            * Set msb
+       BL   @VSBW
+SETMT5 INC  R8
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+W300H  DATA >0300
+*// SETMT
+
+***************************************************************************
+*
+* Find scroll tile
+*
+* R0: From/to tile numbers to look up
+*
+* On return R1 MSB contains the scroll tile number, or -1 if not found
+*
+FINDST LI   R1,STILES           * Address of scroll tile definition list
+       MOV  @STLNUM,R2          * Number of scroll tiles
+FINDS1 C    R0,*R1+             * Check list entry
+       JEQ  FINDS2              * Found
+       DEC  R2
+       JNE  FINDS1
+*      Not found
+       SETO R1
+       JMP  FINDS3
+*      Found
+FINDS2 AI   R1,-STILES-2        * Offset into list
+       SRL  R1,1                * Index in list
+       SWPB R1
+*      Return
+FINDS3 B    *R11
+*// FINDST
+
+***************************************************************************
+*
+* Intialize sparkle
+*
+ISPARK MOV  R11,*R10+           * Push return address onto the stack
+*      Find a sprite to use
+       LI   R1,SPRATT+ASPARK    * Attribute
+       LI   R2,NSPARK           * Counter
+ISPAR1 CB   @BYTEC0,*R1         * Check if parked outside screen
+       JEQ  ISPAR2
+       AI   R1,4                * Next sprite
+       DEC  R2
+       JNE  ISPAR1
+       JMP  ISPAR3
+*      Found sprite
+ISPAR2 MOV  @MTOFFS,R0          * Get screen offset
+       JLT  ISPAR3
+       MOV  R0,R3
+       SRL  R3,5                * Rows
+       SLA  R3,3                * y
+       SWPB R3
+       ANDI R0,>001F            * Columns
+       SLA  R0,3                * x
+       SOC  R3,R0               * Combine y and x
+       MOV  R0,*R1+
+       LI   R0,PSPARK*256+10    * Pattern + color yellow
+       MOV  R0,*R1
+*      Return
+ISPAR3 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// ISPARK
+
+***************************************************************************
+*
+* Handle question mark tile
+*
+* R1: meta tile address
+*
+* Specials triggered by question mark
+* - Bonus points
+* - Restore energy
+* - Extra life
+* - Double jump (time limited condition)
+* - Immunity (time limited condition)
+* - Confusion / inverse movement (time limited condition)
+*
+QUESTM MOV  R11,*R10+           * Push return address onto the stack
+       MOV  R1,@QSTMPA          * Save map address
+       LI   R0,MTTILE           * Change to tile
+       BL   @SETMT              * Set the meta tile
+       BL   @ISPARK             * Init sparkle
+       MOV  @QSTMPA,R1          * Restore map address
+*      JMP  QUEST6              * Test specific condition
+       BL   @SWITCH             * Check if tile is switching other tiles
+       MOV  R0,R0               * A non-zero return value
+       JNE  QUEST9              * means that it was a trigger
+*      Handle other specials
+       BL   @RAND               * Call random routine
+       CI   R0,>2000
+       JL   QUEST1              * Double jump [>0000 - >2000[
+       CI   R0,>4000
+       JL   QUEST6              * Double jump [>2000 - >4000[
+       CI   R0,>8000
+       JL   QUEST2              * Immunity [>4000 - >8000[
+       CI   R0,>9000
+       JL   QUEST3              * Confusion [>8000 - >9000[
+       CI   R0,>B000
+       JL   QUEST4              * Restore energy [>9000 - >B000[
+       CI   R0,>C000
+       JL   QUEST5              * Extra life [>B000 - >C000[
+*      Bonus points
+       LI   R0,1000
+       BL   @ADDSCO             * Add score [>C000 - >FFFF]
+       MOV  @PGIFT,R0
+       JNE  QUEST9
+       LI   R0,PBONUS*256+6
+       MOV  R0,@PGIFT
+       LI   R0,POINT
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Double jump
+QUEST1 LI   R1,512
+       MOV  R1,@CNDCNT
+       LI   R1,CN_DJMP
+       MOV  R1,@COND
+       BL   @SETCLR
+       LI   R0,LONG
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Immunity
+QUEST2 LI   R1,512
+       MOV  R1,@CNDCNT
+       LI   R1,CN_IMMU
+       MOV  R1,@COND
+       BL   @SETCLR
+       LI   R0,FINE
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Confusion
+QUEST3 LI   R1,512
+       MOV  R1,@CNDCNT
+       LI   R1,CN_CONF
+       MOV  R1,@COND
+       BL   @SETCLR
+       LI   R0,UHOH
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Restore energy
+QUEST4 BL   @RSTNRG
+       MOV  @PGIFT,R0
+       JNE  QUEST9
+       LI   R0,PNRG*256+12
+       MOV  R0,@PGIFT
+       LI   R0,TOP
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Extra ball
+QUEST5 INC  @LIVES
+       BL   @DSPLVS
+       MOV  @PGIFT,R0
+       JNE  QUEST9
+       LI   R0,PXBALL*256+4
+       MOV  R0,@PGIFT
+       LI   R0,MORE
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Speed
+QUEST6 LI   R1,512
+       MOV  R1,@CNDCNT
+       LI   R1,CN_SPED
+       MOV  R1,@COND
+       BL   @SETCLR
+       LI   R0,DOUBLE
+       BL   @SPEAK              * Say something
+       JMP  QUEST9
+*      Return
+QUEST9 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+QSTMPA DATA >0000
+*// QUESTM
+
+***************************************************************************
+*
+* Set ball color
+*
+* R1: Contains color to set
+*
+* 0 = White
+* 1 = Green
+* 2 = Blue
+* 3 = Red
+* 4 = Yellow
+*
+SETCLR SLA  R1,1
+       MOVB @BCLRS(R1),@SPRATT+3
+       MOVB @BCLRS+1(R1),@SPRATT+7
+       B    *R11
+BCLRS  DATA >0F0E,>030C,>0504,>0906,>0F0A
+*// SETCLR
+
+*********************************************************************
+*
+* Decrement energy
+*
+* R1 contains the number of units to subtract
+*
+DECNRG MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @ENERGY,R2
+       JEQ  DECNR2
+       LI   R0,CHNRG*8+PTRNT1+32
+       S    R2,R0
+       BL   @VWAD               * Set pattern VDP write address
+       S    R1,R2
+       MOV  R2,@ENERGY
+       JGT  DECNR0
+       MOV  @DIED,R0            * Check if already died
+       JNE  DECNR0
+       INC  @DIED               * Set as died
+       CLR  @JMPFRM             * Clear counter
+*      Update patterns
+DECNR0 MOV  R1,R2
+DECNR1 CLR  @VDPWD
+       DEC  R2
+       JNE  DECNR1
+*      Return
+DECNR2 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// DECNRG
+
+*********************************************************************
+*
+* Restore energy
+*
+RSTNRG MOV  R11,*R10+           * Push return address onto the stack
+       LI   R0,32
+       MOV  R0,@ENERGY
+*      Restore patterns
+       LI   R0,CHNRG*8+PTRNT1
+       BL   @VWAD
+       LI   R0,VDPWD
+       LI   R1,>007F            * Energy pattern
+       LI   R2,32
+RSTNR1 MOVB R1,*R0
+       MOVB @R1LB,*R0
+       DECT R2
+       JNE  RSTNR1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// RSTNRG
+
+*********************************************************************
+*
+* Display lives
+*
+DSPLVS MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @LIVES,R3
+       JLT  DSPLV5
+       LI   R0,LVSBUF
+       LI   R1,CHBALL*256
+       MOV  R3,R2
+       JEQ  DSPLV4
+       CI   R2,6
+       JLE  DSPLV1
+       LI   R2,6
+DSPLV1 MOVB R1,*R0+
+       DEC  R2
+       JNE  DSPLV1
+DSPLV4 LI   R2,6
+       S    R3,R2
+       JEQ  DSPLV3
+       JLT  DSPLV3
+       LI   R1,CHSPAC*256
+DSPLV2 MOVB R1,*R0+
+       DEC  R2
+       JNE  DSPLV2
+*      Display to VDP
+DSPLV3 LI   R0,5*32+25
+       LI   R1,LVSBUF
+       LI   R2,6
+       BL   @DSPTXT
+*      Return
+DSPLV5 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+LVSBUF BYTE CHBALL,CHBALL,CHBALL,CHBALL,CHBALL,CHBALL
+*// DSPLVS
+
+*********************************************************************
+*
+* Display time
+*
+DSPTME MOV  R11,*R10+           * Push return address onto the stack
+       CLR  R3
+       LI   R4,MAXFRM           * Max frames to complete level
+       S    @FRAME,R4
+       JLT  DSPTM2
+       LI   R1,MAXFRM/48+1      * Divisor - max time / length of time scale (6*8)
+       DIV  R1,R3               * Number of time scale units in R3
+       MOV  R3,R1               * Get time scale units
+       ANDI R1,7                * Mod 8
+       LI   R0,8
+       S    R1,R0               * Shift = 8 - (time scale units Mod 8) [1-8]
+       LI   R1,>FF00            * Pattern byte
+       SLA  R1,0                * Shift pattern byte
+DSPTM1 SRL  R3,3                * Number of full characters
+       AI   R3,TMECHR           * Add list base address
+       CLR  R0
+       MOVB *R3,@R0LB           * Get character pattern number to update
+       SLA  R0,3                * Multiple by 8
+       AI   R0,PTRNTB+7         * Add base address + 7 rows
+       BL   @VSBW
+*      Return
+DSPTM2 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+TMECHR BYTE >FD,>FC,>FB,>FA,>FE,>77
+*// DSPTME
+
+*********************************************************************
+*
+* Restore time
+*
+RSTTME MOV  R11,*R10+           * Push return address onto the stack
+       LI   R1,>FF00            * Pattern row
+       LI   R2,6
+       LI   R3,TMECHR
+RSTTM1 CLR  R0
+       MOVB *R3+,@R0LB          * Get character pattern number to restore
+       SLA  R0,3                * Multiple by 8
+       AI   R0,PTRNTB+7         * Add base address + 7 rows
+       BL   @VSBW               * Set byte
+       DEC  R2
+       JNE  RSTTM1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// RSTTME
+
+*********************************************************************
+*
+* Add score
+*
+* R0 contains the score to add
+*
+ADDSCO MOV  R11,*R10+           * Push return address onto the stack
+       A    R0,@SCOREL
+       JNC  ADDSC1
+       INC  @SCOREH
+ADDSC1 BL   @DSPSCO
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// ADDSCO
+
+*********************************************************************
+*
+* Display score
+*
+DSPSCO MOV  R11,*R10+           * Push return address onto the stack
+       MOV  @SCOREH,R0
+       MOV  @SCOREL,R1
+       LI   R2,6                * Counter
+       LI   R3,10               * Divisor
+       LI   R4,NUMBUF+5         * Start backwards
+*      Digit loop
+DSPNU1 DIV  R3,R0               * Divide to get digit as remainder in R1
+       AI   R1,CHZERO           * Add ASCII code for zero
+       SWPB R1                  * Swap to high byte
+       MOVB R1,*R4              * Store digit in buffer
+       DEC  R4                  * Next digit in buffer (working backwards)
+       MOV  R0,R1
+       CLR  R0
+       DEC  R2                  * Count down
+       JNE  DSPNU1              * Digit loop
+*      Display to VDP
+       LI   R0,18*32+25
+       LI   R1,NUMBUF
+       LI   R2,6
+       BL   @DSPTXT
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+NUMBUF BYTE CHZERO,CHZERO,CHZERO,CHZERO,CHZERO,CHZERO
+*// DSPSCO
+
+***************************************************************************
+*
+* Display level
+*
+DSPLVL MOV  R11,*R10+           * Push return address onto the stack
+       LI   R4,NUMBUF+4
+       LI   R1,CHZERO*256+CHZERO
+       MOV  R1,*R4
+       CLR  R0
+       MOV  @LEVEL,R1
+       LI   R3,10
+       DIV  R3,R0
+       AB   @R0LB,*R4+          * Display first digit
+       AB   @R1LB,*R4+          * Display last digit
+*      Display to VDP
+       LI   R0,22*32+27
+       LI   R1,NUMBUF+4
+       LI   R2,2
+       BL   @DSPTXT
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// DSPLVL
+
+*********************************************************************
+*
+* Display text to all name table buffers
+*
+* R0: Screen offset (characters) of upper left corner
+* R1: Source address
+* R2: Length
+*
+* Modifies R0-R5
+*
+DSPTXT MOV  R11,*R10+           * Push return address onto the stack
+       MOV  R0,R3
+       MOV  R1,R4
+       MOV  R2,R5
+       AI   R0,NAMET0
+       BL   @VMBW
+       MOV  R3,R0
+       MOV  R4,R1
+       MOV  R5,R2
+       AI   R0,NAMET1
+       BL   @VMBW
+       MOV  R3,R0
+       MOV  R4,R1
+       MOV  R5,R2
+       AI   R0,NAMET2
+       BL   @VMBW
+       MOV  R3,R0
+       MOV  R4,R1
+       MOV  R5,R2
+       AI   R0,NAMET3
+       BL   @VMBW
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// DSPTXT
+
+***************************************************************************
+*
+* Display right side panel
+*
+DSPPNL MOV  R11,*R10+           * Push return address onto the stack
+*      Copy some characters back that has been overwritten by the logo
+       LI   R0,112*8+PTRNT1
+       LI   R1,FIXPAT
+       LI   R2,16*8
+       BL   @VCOPY
+       LI   R0,112*8+COLRTB
+       LI   R1,FIXCOL
+       LI   R2,16*8
+       BL   @VCOPY
+*      Display to all four buffers
+       LI   R0,NAMET0+VIEWW
+       BL   @DSPPN0
+       LI   R0,NAMET1+VIEWW
+       BL   @DSPPN0
+       LI   R0,NAMET2+VIEWW
+       BL   @DSPPN0
+       LI   R0,NAMET3+VIEWW
+       BL   @DSPPN0
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*      Display to one name table
+DSPPN0 MOV  R11,*R10+           * Push return address onto the stack
+       MOV  R0,R7
+       LI   R8,FIXMAP
+       LI   R9,PANELH           * Rows
+DSPPN1 MOV  R7,R0
+       MOV  R8,R1
+       LI   R2,PANELW           * Columns
+       BL   @VCOPY
+       AI   R7,SCRNW            * Next screen row
+       AI   R8,PANELW           * Next map row
+       DEC  R9
+       JNE  DSPPN1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// DSPPNL
+
+***************************************************************************
+*
+* Display logo
+*
+DSPLGO MOV  R11,*R10+           * Push return address onto the stack
+*      Screen off
+       LI   R0,>01A2
+       BL   @VWTR
+*      Disable sprites
+       LI   R0,SPRATB
+       LI   R1,>D000
+       BL   @VSBW
+*      Clear name table
+       LI   R0,NAMET0
+       LI   R1,CHSPAC*256
+       LI   R2,768
+       BL   @VSMW
+*      * Patterns
+       LI   R0,PTRNT1
+       LI   R1,LGPAT
+       LI   R2,NLOGOP*8
+       BL   @VCOPY
+*      * Colors
+       LI   R0,COLRTB
+       LI   R1,LGCOL
+       LI   R2,NLOGOP*8
+       BL   @VCOPY
+*      * Map
+       LI   R0,NAMET0+256
+       LI   R1,LGMAP
+       LI   R2,256
+       BL   @VCOPY
+*      Set name table
+       LI   R0,>020A
+       BL   @VWTR
+*      Screen on
+       LI   R0,>01E2
+       BL   @VWTR
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// DSPLGO
+
+***************************************************************************
+*
+* VDP Multiple 8 Byte Write
+*
+* The inner loop has been moved into scratch pad
+* memory for a performance boost of about 10%.
+*
+* R0: Starting write address in VDP RAM
+* R1: Starting read address in CPU RAM
+* R2: Number of groups of 8 bytes to send to the VDP RAM
+*
+* R0 is modified, R1 is next read address, R2 is zero
+*
+VM8BW  MOV  R11,*R10+           * Push return address onto the stack
+       BL   @VWAD               * Setup write address
+       LI   R0,VDPWD            * Load VDP write data address into register
+       BL   @VCPY
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// VM8BW
+
+***************************************************************************
+*
+* VDP Multiple 8 Byte High Write
+*
+* Like VM8BW but sets the most significant bit of each byte written.
+* Note: only works correctly for even read addresses.
+*
+* R0: Starting write address in VDP RAM
+* R1: Starting read address in CPU RAM (must be even)
+* R2: Number of groups of 8 bytes to send to the VDP RAM
+*
+* R0 is modified, R1 is next read address, R2 is zero, R3 is modified
+*
+VM8BHW MOV  R11,*R10+           * Push return address onto the stack
+       BL   @VWAD               * Setup write address
+       LI   R3,VDPWD            * Load VDP write data address into register
+       LI   R15,>8000
+VM8BH1 .IFNE  ANYMPW
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       MOVB *R1+,R0
+       SOC  R15,R0
+       MOVB R0,*R3
+       .ELSE
+       MOV  *R1+,R0             * Read word from CPU RAM
+       ORI  R0,>8080            * Set most significant bits
+       MOVB R0,*R3              * Send MSB to VDP
+       MOVB @R0LB,*R3           * Send LSB to VDP
+       MOV  *R1+,R0             * Repeat 2
+       ORI  R0,>8080            *
+       MOVB R0,*R3              *
+       MOVB @R0LB,*R3           *
+       MOV  *R1+,R0             * Repeat 3
+       ORI  R0,>8080            *
+       MOVB R0,*R3              *
+       MOVB @R0LB,*R3           *
+       MOV  *R1+,R0             * Repeat 4 times
+       ORI  R0,>8080            *
+       MOVB R0,*R3              *
+       MOVB @R0LB,*R3           *
+       .ENDIF
+       DEC  R2                  * Group counter
+       JNE  VM8BH1              * Loop if not done
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// VM8BHW
+
+***************************************************************************
+*
+* Fast CPU to VDP copy, replaces VMBW
+*
+* R0: Destination address
+* R1: Source address
+* R2: Number of bytes to copy
+*
+* R0-R3 are modified
+*
+VDPCP0 MOV  R11,*R10+           * Push return address onto the stack
+       JMP  VDPCP1
+VDPCP  MOV  R11,*R10+           * Push return address onto the stack
+       SWPB R0
+       MOVB R0,@VDPWA           * Send low byte of VDP RAM write address
+       SWPB R0
+       ORI  R0,>4000            * Set the two MSbits to 01 for write
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+VDPCP1 LI   R0,VDPWD
+       MOV  R2,R3
+       SRL  R2,3                * Number of groups of 8
+       JEQ  VDPCP2
+       BL   @VCPY
+       ANDI R3,>0007            * Isolate number of remaining bytes
+       JEQ  VDPCP3
+VDPCP2 MOVB *R1+,*R0
+       DEC  R3
+       JNE  VDPCP2
+*      Return
+VDPCP3 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// VDPCP
+
+***************************************************************************
+*
+* VDP copy unrolled loop
+*
+VCPY8  MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       MOVB *R1+,*R0
+       DEC  R2
+       JNE  VCPY8
+       B    *R11
+VCPY8E
+*// VCPY8
+
+***************************************************************************
+*
+* VDP Set Read Address
+*
+* R0   Address to set VDP address counter to
+*
+VRAD   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       ANDI R0,>3FFF            * Make sure the two MSbits are 00 for read
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+       B    *R11
+*// VRAD
+
+***************************************************************************
+*
+* VDP Set Write Address
+*
+* R0   Address to set VDP address counter to
+*
+VWAD   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       ORI  R0,>4000            * Set the two MSbits to 01 for write
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+       ANDI R0,>3FFF            * Restore R0 top two MSbits
+       B    *R11
+*// VWAD / VRAD
+
+***************************************************************************
+*
+* VDP Single Byte Write
+*
+* R0   Write address in VDP RAM
+* R1   MSB of R1 sent to VDP RAM
+*
+* R0 is modified, but can be restored with: ANDI R0,>3FFF
+*
+VSBW   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       ORI  R0,>4000            * Set read/write bits 14 and 15 to write (01)
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+       MOVB R1,@VDPWD           * Write byte to VDP RAM
+       B    *R11
+*// VSBW
+
+***************************************************************************
+*
+* VDP Single Byte Multiple Write
+*
+* R0   Starting write address in VDP RAM
+* R1   MSB of R1 sent to VDP RAM
+* R2   Number of times to write the MSB byte of R1 to VDP RAM
+*
+* R0 is modified, but can be restored with: ANDI R0,>3FFF
+*
+VSMW   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       ORI  R0,>4000            * Set read/write bits 14 and 15 to write (01)
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+VSMWLP MOVB R1,@VDPWD           * Write byte to VDP RAM
+       DEC  R2                  * Byte counter
+       JNE  VSMWLP              * Check if done
+       B    *R11
+*// VSMW
+
+***************************************************************************
+*
+* VDP Multiple Byte Write
+*
+* R0   Starting write address in VDP RAM
+* R1   Starting read address in CPU RAM
+* R2   Number of bytes to send to the VDP RAM
+*
+* R0 is modified, but can be restored with: ANDI R0,>3FFF
+*
+VMBW   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       ORI  R0,>4000            * Set read/write bits 14 and 15 to write (01)
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+VMBWLP MOVB *R1+,@VDPWD         * Write byte to VDP RAM
+       DEC  R2                  * Byte counter
+       JNE  VMBWLP              * Check if done
+       B    *R11
+*// VMBW
+
+***************************************************************************
+*
+* VDP Single Byte Read
+*
+* R0   Read address in VDP RAM
+* R1   MSB of R1 set to byte from VDP RAM
+*
+VSBR   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+       MOVB @VDPRD,R1           * Read byte from VDP RAM
+       B    *R11
+*// VSBR
+
+***************************************************************************
+*
+* VDP Multiple Byte Read
+*
+* R0   Starting read address in VDP RAM
+* R1   Starting write address in CPU RAM
+* R2   Number of bytes to read from VDP RAM
+*
+VMBR   MOVB @R0LB,@VDPWA        * Send low byte of VDP RAM write address
+       MOVB R0,@VDPWA           * Send high byte of VDP RAM write address
+VMBRLP MOVB @VDPRD,*R1+         * Read byte from VDP RAM
+       DEC  R2                  * Byte counter
+       JNE  VMBRLP              * Check if finished
+       B    *R11
+*// VMBR
+
+***************************************************************************
+*
+* VDP Write To Register
+*
+* R0 MSB    VDP register to write to
+* R0 LSB    Value to write
+*
+VWTR   MOVB @R0LB,@VDPWA        * Send low byte (value) to write to VDP register
+       ORI  R0,>8000            * Set up a VDP register write operation (10)
+       MOVB R0,@VDPWA           * Send high byte (address) of VDP register
+       B    *R11
+*// VWTR       
+
+***************************************************************************
+*
+* VDP RAM copy
+*
+* R0: Destination address (word aligned)
+* R1: Source address (word aligned)
+* R2: Number of bytes to copy
+*
+VCPSZE EQU  8                   * Buffer size
+*
+VCOPY  MOV  R11,*R10+           * Push return address onto the stack
+       MOV  R0,R3               * Destionation
+       MOV  R1,R4               * Source
+       MOV  R2,R5               * Count
+       LI   R6,VCPSZE
+VCOPY1 MOV  R4,R0
+       LI   R1,VCPBUF
+       MOV  R6,R2
+       BL   @VMBR
+       MOV  R3,R0
+       LI   R1,VCPBUF
+       MOV  R6,R2
+       BL   @VMBW
+       A    R6,R3
+       A    R6,R4
+       S    R6,R5
+       JGT  VCOPY1
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+VCPBUF BSS  VCPSZE
+*// COPY
+
+***************************************************************************
+*
+* CPU RAM copy
+*
+* R0: Destination address (word aligned)
+* R1: Source address (word aligned)
+* R2: Number of bytes to copy (multiple of 2)
+
+COPY   MOV  *R1+,*R0+
+       DECT R2
+       JNE  COPY
+*      Return
+       B    *R11
+*// COPY
+
+***************************************************************************
+*
+* Wait for fire button
+*
+* R2: Number of frames to wait before returning, or 0 for never
+*
+WTFIRE MOV  R11,*R10+           * Push return address onto the stack
+WTFIR1 LI   R0,>0606            * Fire button
+       BL   @CHKKEY
+       JNE  WTFIR2
+       BL   @CKQUIT             * Check quit
+       BL   @RAND               * Randomize
+       INC  @FRAME
+       BL   @VSYNC
+       MOV  R2,R2
+       JEQ  WTFIR1
+       DEC  R2
+       JNE  WTFIR1
+*      Return
+WTFIR2 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// WTFIRE
+
+***************************************************************************
+*
+* Check key
+*
+* R0: Column in MSB: >0000 - >0700, Row in LSB: >0006 - >0014
+*
+*       Column   0      1    2    3    4    5     6       7
+*     Row  
+*     >0006      =      .    ,    M    N    /    Fire    Fire
+*     >0008    Space    L    K    J    H    ;    Left    Left
+*     >000A    Enter    O    I    U    Y    P    Right   Right
+*     >000C             9    8    7    6    0    Down    Down
+*     >000E    Fctn     2    3    4    5    1    Up      Up
+*     >0010    Shift    S    D    F    G    A
+*     >0012    Ctrl     W    E    R    T    Q
+*     >0014             X    C    V    B    Z
+*
+* On return NEQ means that the key is pressed
+*
+CHKKEY LI   R12,>0024           * CRU address of the column decoder
+       LDCR R0,3                * Select column
+       ANDI R0,>00FF
+       MOV  R0,R12              * Select row
+       TB   0                   * Test key, EQ if not pressed
+       B    *R11
+*// CHKKEY
+
+*********************************************************************
+*
+* Generate a pseudo random number
+*
+* On return R0 contains the number, which is also stored at @RANDNO
+*
+* R14 and R15 are modified
+*
+RAND   LI   R14,28643           * A prime number to multiply by
+       MPY  @RANDNO,R14         * Multiply by last random number
+       AI   R15,31873           * Add a prime number
+       MOV  @FRAME,R0           * Use the VSYNC tick to mix it up a little
+       SRC  R15,0               * Mix up the number to break odd/even pattern
+RAND1  MOV  R15,@RANDNO         * Save this number for next time
+       MOV  R15,R0              * Copy as return value
+       B    *R11
+*// RAND
+
+*********************************************************************************
+*
+* Play music
+*
+PLAYMU MOV  R11,*R10+           * Push return address onto the stack
+       .IFNE BGTIME
+       LI   R0,>0701
+       BL   @VWTR
+       .ENDIF
+       BL   @stplay
+       LWPI WRKSP
+       MOV  @PLYRWS+14,R0       * Check if music is done
+       JNE  PLAYM1
+*      Restart music
+       BL   @INITMU
+*      Return
+PLAYM1 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// PLAYMU
+
+*********************************************************************************
+*
+* Initialize music
+*
+INITMU MOV  R11,*R10+           * Push return address onto the stack
+       LI   R1,MUSIC
+       LI   R2,0
+       BL   @stinit
+*      Return
+       DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// INITMU
+
+*********************************************************************
+*
+* Mute sound
+*
+MTESND LI   R0,MUTETB            * Mute all
+       LI   R2,4
+MTESN1 MOVB *R0+,@SOUND
+       DEC  R2
+       JNE  MTESN1
+       B    *R11
+MUTETB BYTE >9F,>BF,>DF,>FF
+*// MTESND
+
+*********************************************************************
+*
+* Play sound
+*
+* R0: pointer to sound list row
+*
+PLYSND CLR  R2
+       MOVB *R0+,@R2LB
+PLYSN1 MOVB *R0+,@SOUND
+       DEC  R2
+       JNE  PLYSN1
+       B    *R11
+*// PLYSND
+
+*********************************************************************
+*
+* Speak a word from the resident vocabulary
+*
+* R0 points to the word to say.
+*
+LONG   EQU  >40D3               * Long jump
+POINT  EQU  >50EC               * Bonus points
+UHOH   EQU  >71F4               * Confusion
+GOOD   EQU  >30D6               *
+FINISH EQU  >2B94               * Level completed
+MORE   EQU  >4642               * Extra life
+TOP    EQU  >6F8D               * Energy
+YES    EQU  >7D58               *
+NO     EQU  >3C4F               * Space
+CONNEC EQU  >208B               * Switch
+FINE   EQU  >2B1E               * Immunity
+DOUBLE EQU  >2599               * Speed
+READY  EQU  >56B3
+A1     EQU  >1700
+OH     EQU  >4B7D
+*
+SPEAK  LI	R2,4
+SPEAK1 SRC	R0,4
+	   MOV	R0,R1
+	   SRC	R1,4
+	   ANDI	R1,>0F00
+	   ORI	R1,>4000
+	   MOVB	R1,@SPCHWT
+	   DEC	R2
+	   JNE	SPEAK1
+	   LI	R0,>4000
+	   MOVB	R0,@SPCHWT
+	   LI	R0,>5000
+	   MOVB	R0,@SPCHWT
+	   B	*R11
+*// SPEAK
+
+*********************************************************************************
+*
+* Change scroll tile colors
+*
+* R0 contains a pointer to the zero terminated list of from/to color bytes
+*
+CHGCLR MOV  R11,*R10+           * Push return address onto the stack
+       MOV  R0,R0
+       JEQ  CHGCL9
+CHGCL1 MOV  *R0,R1              * Get from/to color bytes
+       MOVB @R1LB,R4
+       JEQ  CHGCL9              * Zero terminated
+       MOV  @STLNUM,R2          * Number of scroll tiles
+       SLA  R2,6                * Number of bytes to update (8 frames * 8 bytes/tile)
+       LI   R3,CLFRM0           * Pointer to color bytes
+CHGCL2 CB   R1,*R3+
+       JNE  CHGCL3
+       DEC  R3
+       MOVB R4,*R3+
+CHGCL3 DEC  R2
+       JNE  CHGCL2
+       INCT R0
+       JMP  CHGCL1
+*      Return
+CHGCL9 DECT R10                 * Pop return address off the stack
+       MOV  *R10,R11
+       B    *R11
+*// CHGCLR
+
+***************************************************************************
+*
+*      Data
+*
+LEVELS DATA MTMAP1,EDLST1,SWLST1,0
+       DATA MTMAP2,EDLST2,SWLST2,0
+       DATA MTMAP3,EDLST3,SWLST3,CLRCH1
+       DATA MTMAP4,EDLST4,SWLST4,CLRCH1
+       DATA MTMAP5,EDLST5,SWLST5,0
+       DATA MTMAP6,EDLST6,SWLST6,0
+       DATA MTMAP7,EDLST7,SWLST7,CLRCH1
+       DATA MTMAP8,EDLST8,SWLST8,0
+       DATA 0
+
+CLRCH1 BYTE >54,>DF,>96,>3C,>00,>00     * ,>F1,>F6,>E1,>E6
+
+JMPPAT BYTE PBALL2,PBALL2,PBALL1,PBALL1,PBALL1,PBALL1,PBALL0,PBALL0
+       BYTE PBALL0,PBALL0,PBALL1,PBALL1,PBALL1,PBALL1,PBALL2,PBALL2
+JMPHGT BYTE 1,1,1,0,1,0,1,0,0,-1,0,-1,0,-1,-1,-1
+
+DIEPAT BYTE PBALL2,PBALL2+4,PBALL3,PBALL3+4,PBALL4,PBALL4+4,PBALL5,PBALL5+4
+       BYTE PSPARK+12,PSPARK+12,PSPARK+8,PSPARK+8,PSPARK+4,PSPARK+4,PSPARK,PSPARK
+       BYTE PSPARK+4,PSPARK+4,PSPARK+8,PSPARK+8,PSPARK+12,PSPARK+12,PEMPTY,PEMPTY
+
+*      Sprite attributes
+SPRATT BYTE >80,>60,PBALL2,>0F      * Ball top layer
+       BYTE >80,>60,PBALL2+4,>0E    * Ball bottom layer
+       BYTE >C0,>00,PENEMY,>0F      * Enemy 1 plane 1
+       BYTE >C0,>00,PENEMY+4,>01    * Enemy 1 plane 2
+       BYTE >C0,>00,PENEMY,>0F      * Enemy 2 plane 1
+       BYTE >C0,>00,PENEMY+4,>01    * Enemy 2 plane 2
+       BYTE >C0,>00,PENEMY,>0F      * Enemy 3 plane 1
+       BYTE >C0,>00,PENEMY+4,>01    * Enemy 3 plane 2
+       BYTE >C0,>00,PENEMY,>0F      * Enemy 4 plane 1
+       BYTE >C0,>00,PENEMY+4,>01    * Enemy 4 plane 2
+       BYTE >C0,>00,PSPARK,>0A      * Sparkle 1
+       BYTE >C0,>00,PSPARK,>0A      * Sparkle 2
+       BYTE >C0,>00,PSPARK,>0A      * Sparkle 3
+       BYTE >80,>60,PBALL2+4,>01    * Ball shadow
+
+*     Press fire sprite attributes
+PRFATT BYTE >80,>C0,PPRF,>0F
+       BYTE >80,>D0,PPRF+4,>0F
+       BYTE >80,>E0,PPRF+8,>0F
+       BYTE >D0,>00
+
+*     Game over sprite attributes
+GMOATT BYTE >58,>50,PGMO,>0F
+       BYTE >58,>60,PGMO+4,>0F
+       BYTE >59,>51,PGMO,>01
+       BYTE >59,>61,PGMO+4,>01
+       BYTE >D0,>00
+
+*      Scroll tile counts
+STLNUM DATA >0000               * Actual number of scroll tiles
+STLNU1 EQU  76                  * Max number of scroll tiles - determines allocated buffer sizes
+STLNU2 DATA >0000               * 2/3 of STLNUM
+STLNU3 DATA >0000               * 1/3 of STLNUM
+
+
+****************************************
+* Meta Tile definitions (NW, NE, SW, SE)
+****************************************
+MTILES
+MTILE0 BYTE >00,>01,>08,>09
+MTILE1 BYTE >02,>03,>0A,>0B
+MTILE2 BYTE >04,>05,>0C,>0D
+MTILE3 BYTE >06,>07,>0E,>0F
+MTILE4 BYTE >10,>11,>18,>19
+MTILE5 BYTE >12,>13,>1A,>1B
+MTILE6 BYTE >14,>15,>1C,>1D
+MTILE7 BYTE >16,>17,>1E,>1F
+
+***************************************************************************
+*
+* Include data files
+*
+       COPY "tiplayer.a99"
+*      COPY "tiplayersfx.a99"
+       COPY "level1.a99"
+       COPY "level2.a99"
+       COPY "level3.a99"
+       COPY "level4.a99"
+       COPY "level5.a99"
+       COPY "level6.a99"
+       COPY "level7.a99"
+       COPY "level8.a99"
+MUSIC  BCOPY "monty-short.vgm.spf"
+*FXCOIN BCOPY "coin.vgm.spf"
+*FXJUMP BCOPY "longjump.vgm.spf"
+BUFFS
+*      Will be overwritten by buffers after uploading to VDP
+       COPY "fixed.a99"
+       COPY "sprites.a99"
+       COPY "logo.a99"
+
+***************************************************************************
+*
+* Buffers
+*
+FRMSIZ EQU  STLNU1*8
+
+STILES EQU  BUFFS               * Scroll tile lookup table
+ROWBUF EQU  STILES+224          * Buffer for storing one map row
+ENMLST EQU  ROWBUF+MAPW         * Enemy list
+SWLIST EQU  ENM_SZ*8+2+ENMLST   * Switch list
+PTFRM0 EQU  SW_SZ*4+2+SWLIST    * Pattern frame 0
+PTFRM7 EQU  7*FRMSIZ+PTFRM0     * Pattern frame 7
+CLFRM0 EQU  FRMSIZ+PTFRM7       * Color frame 0
+CLFRM7 EQU  7*FRMSIZ+CLFRM0     * Color frame 7
+RAMMAX EQU  FRMSIZ+CLFRM7       * Max used RAM address
+
+***************************************************************************
+*
+* Lower memory
+*
+MTMAP  EQU  >2000               * Meta tile map (unpacked)
+MAP    EQU  MAPW*MAPH/4+MTMAP   * Expanded map
+MAPE   EQU  MAPW*MAPH+MAP       * End of map
+
+       AORG >3000
+       COPY "patterns.a99"
+
+       END  START
+
+* The End
